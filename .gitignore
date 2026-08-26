@@ -9,4 +9,8 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 *.log
-
+Front-end/node_modules/
+Front-end/dist/
+Front-end/.env
+Front-end/.env.*
+!Front-end/.env.example
