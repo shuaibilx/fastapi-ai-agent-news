@@ -91,6 +91,19 @@ def test_agent_service_sends_only_current_message_and_server_thread_config():
     assert len(memory.verified) == 1
 
 
+def test_agent_service_reserves_graph_steps_for_middleware_and_tool_execution():
+    runner = FakeRunner()
+
+    asyncio.run(make_service(runner, FakeMemoryRuntime()).ask(
+        user_id=17,
+        message="查询我的浏览历史",
+        conversation_id=None,
+        reader=FakeReader(),
+    ))
+
+    assert runner.calls[0][2]["recursion_limit"] >= 100
+
+
 def test_agent_service_collects_multiple_tool_results_and_deduplicates_sources():
     runner = FakeRunner([
         tool_result("call-1", 11),

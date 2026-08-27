@@ -16,6 +16,11 @@ from app.ai.agent.safety import SensitiveDataBlocked, sanitize_text
 from app.ai.agent.tools import AgentReadPort, AgentRuntimeContext
 
 
+_MIN_GRAPH_RECURSION_LIMIT = 100
+_GRAPH_STEPS_PER_MODEL_CALL = 12
+_GRAPH_STEP_OVERHEAD = 20
+
+
 class AgentProviderUnavailable(Exception):
     """Raised when the model or a core agent dependency cannot complete a run."""
 
@@ -96,7 +101,13 @@ class AgentService:
             page_size_limit=self._page_size_limit,
             tool_result_max_tokens=self._tool_result_max_tokens,
         )
-        config = {"recursion_limit": self._max_iterations * 2 + 3, **session.config}
+        # LangGraph counts middleware and tool nodes as graph steps. ModelCallLimitMiddleware
+        # remains the hard bound for model invocations; this limit only leaves room for orchestration.
+        recursion_limit = max(
+            _MIN_GRAPH_RECURSION_LIMIT,
+            self._max_iterations * _GRAPH_STEPS_PER_MODEL_CALL + _GRAPH_STEP_OVERHEAD,
+        )
+        config = {"recursion_limit": recursion_limit, **session.config}
         try:
             output = await self._runner.ainvoke(
                 {"messages": [HumanMessage(content=safe_message)]},
