@@ -1,6 +1,6 @@
 <template>
   <div class="ai-chat-container">
-    <van-nav-bar title="AI问答" fixed />
+    <van-nav-bar title="AI新闻助手" right-text="新对话" fixed @click-right="startNewConversation" />
     
     <div class="chat-content">
       <div class="messages-container" ref="messagesContainer">
@@ -26,6 +26,16 @@
                 <span class="citation-title">{{ citation.title }}</span>
                 <span class="citation-excerpt">{{ citation.excerpt }}</span>
               </div>
+            </div>
+            <div v-if="message.role === 'assistant' && message.toolCalls?.length" class="tool-calls">
+              <div class="tool-calls-title">已使用工具</div>
+              <div v-for="(toolCall, toolIndex) in message.toolCalls" :key="`${toolCall.name}-${toolIndex}`" class="tool-call-item">
+                <span>{{ toolCall.name }}</span>
+                <span>{{ toolCall.summary }}</span>
+              </div>
+            </div>
+            <div v-if="message.role === 'assistant' && message.memoryStatus === 'unavailable'" class="memory-warning">
+              对话记忆暂不可用，本次回答未受影响。
             </div>
           </div>
         </div>
@@ -58,23 +68,30 @@
 
 <script setup>
 import { ref, onMounted, nextTick, watch } from 'vue';
-import axios from 'axios';
 import TabBar from '../components/TabBar.vue';
 import { showToast } from 'vant';
 import * as marked from 'marked';
 import DOMPurify from 'dompurify';
-import { apiConfig } from '../config/api';
+import { askNewsAgent } from '../api/ai';
+import { readConversationId } from '../api/agentConversation';
 import { useUserStore } from '../store/user';
 
 const userStore = useUserStore();
 
 // 聊天消息
-const messages = ref([
-  { role: 'assistant', content: '你好！我是AI助手，可以回答与新闻相关的问题。', citations: [] }
-]);
+const createWelcomeMessage = () => ({
+  role: 'assistant',
+  content: '你好！我是AI新闻助手，可以检索新闻，也可以查询你的收藏和浏览历史。',
+  citations: [],
+  toolCalls: [],
+  memoryStatus: 'empty',
+});
+
+const messages = ref([createWelcomeMessage()]);
 const userInput = ref('');
 const messagesContainer = ref(null);
 const isLoading = ref(false);
+const conversationId = ref(null);
 
 // 格式化消息内容（支持Markdown）
 const formatMessage = (content) => {
@@ -92,31 +109,42 @@ const sendMessage = async () => {
   }
 
   const userMessage = userInput.value.trim();
-  messages.value.push({ role: 'user', content: userMessage, citations: [] });
+  messages.value.push({ role: 'user', content: userMessage, citations: [], toolCalls: [] });
   userInput.value = '';
 
   // 添加AI消息占位
-  messages.value.push({ role: 'assistant', content: '', citations: [] });
+  messages.value.push({
+    role: 'assistant',
+    content: '',
+    citations: [],
+    toolCalls: [],
+    memoryStatus: 'empty',
+  });
 
   await nextTick();
   scrollToBottom();
 
   isLoading.value = true;
   try {
-    const response = await axios.post(
-      `${apiConfig.baseURL}/api/ai/qa`,
-      { question: userMessage },
-      { headers: { Authorization: `Bearer ${userStore.token}` } },
+    const response = await askNewsAgent(
+      userMessage,
+      conversationId.value,
+      userStore.token,
     );
 
-    if (response.data.code !== 200) {
-      throw new Error(response.data.message || '问答请求失败');
+    if (response.code !== 200) {
+      throw new Error(response.message || 'Agent 请求失败');
     }
 
-    messages.value[messages.value.length - 1].content = response.data.data.answer;
-    messages.value[messages.value.length - 1].citations = response.data.data.citations || [];
+    const responseData = response.data;
+    conversationId.value = readConversationId(responseData);
+    const assistantMessage = messages.value[messages.value.length - 1];
+    assistantMessage.content = responseData.answer;
+    assistantMessage.citations = responseData.citations || [];
+    assistantMessage.toolCalls = responseData.toolCalls || [];
+    assistantMessage.memoryStatus = responseData.memoryStatus || 'empty';
   } catch (error) {
-    console.error('AI问答请求失败:', error);
+    console.error('AI Agent 请求失败:', error);
     messages.value[messages.value.length - 1].content =
       error.response?.data?.message || error.message || '问答服务暂时不可用，请稍后重试';
   } finally {
@@ -124,6 +152,14 @@ const sendMessage = async () => {
     await nextTick();
     scrollToBottom();
   }
+};
+
+const startNewConversation = () => {
+  if (isLoading.value) return;
+  conversationId.value = null;
+  messages.value = [createWelcomeMessage()];
+  userInput.value = '';
+  showToast({ message: '已开始新对话', position: 'bottom' });
 };
 
 // 滚动到底部
@@ -241,6 +277,35 @@ onMounted(() => {
   color: #666;
   margin-top: 2px;
   line-height: 1.5;
+}
+
+.tool-calls,
+.memory-warning {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  font-size: 12px;
+}
+
+.tool-calls-title {
+  color: #8790a3;
+  margin-bottom: 4px;
+}
+
+.tool-call-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #666;
+  margin-bottom: 3px;
+}
+
+.tool-call-item span:first-child {
+  color: #1989fa;
+}
+
+.memory-warning {
+  color: #ed6a0c;
 }
 
 /* Markdown 样式 */

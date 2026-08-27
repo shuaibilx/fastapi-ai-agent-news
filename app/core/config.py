@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     ai_summary_cache_ttl_seconds: int = Field(default=60 * 60 * 24 * 30, ge=60)
     ai_qa_retrieval_limit: int = Field(default=5, ge=1, le=20)
     ai_qa_max_context_chars: int = Field(default=6000, ge=200, le=20000)
+    ai_agent_history_max_rounds: int = Field(default=5, ge=1, le=20)
+    ai_agent_history_max_tokens: int = Field(default=3000, ge=100, le=100000)
+    ai_agent_tool_result_max_tokens: int = Field(default=4000, ge=100, le=100000)
+    ai_agent_input_max_tokens: int = Field(default=10000, ge=1000, le=200000)
+    ai_agent_memory_ttl_seconds: int = Field(default=86400, ge=60)
+    ai_agent_max_iterations: int = Field(default=6, ge=1, le=20)
 
     @computed_field
     @property

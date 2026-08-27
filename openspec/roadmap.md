@@ -10,9 +10,9 @@
 
 ## Progress
 
-- **Current Phase:** Phase 3 — News Agent Tools
-- **Next Change:** `add-news-agent-tools`
-- **Completed:** 2 / 5
+- **Current Phase:** Phase 3.1 — Agent Short-Term Memory
+- **Next Change:** `improve-agent-short-term-memory`
+- **Completed:** 3 / 6
 
 ## Phases
 
@@ -34,11 +34,19 @@
 
 ### Phase 3 — News Agent Tools
 
-- [ ] `add-news-agent-tools`
+- [x] `add-news-agent-tools`
 - **Outcome:** 用户可以通过 Agent 调用新闻详情、收藏、浏览历史和 RAG 问答等受控业务工具。
 - **Boundary:** 复用现有关键词 RAG 与业务服务；不引入向量检索、Embedding 或 SSE。
 - **Depends on:** `add-rag-news-qa`.
 - **Verify:** Agent 能依据用户意图选择正确工具，在已认证用户边界内执行，并返回可追溯结果。
+
+### Phase 3.1 — Agent Short-Term Memory
+
+- [ ] `improve-agent-short-term-memory`
+- **Outcome:** Agent 会话在 Token 阈值内保留原始上下文，超限时自动压缩旧消息，并在模型、持久化和响应边界过滤敏感信息。
+- **Boundary:** 仅改进短期会话记忆与隐私防护；不增加长期记忆、向量检索、写入工具或 SSE。
+- **Depends on:** `add-news-agent-tools`.
+- **Verify:** 超限会话保留摘要和最近消息，敏感信息不会进入模型或 Redis，且用户会话隔离与 Redis 降级保持有效。
 
 ### Phase 4 — Semantic News Retrieval
 
