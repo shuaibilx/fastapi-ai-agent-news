@@ -10,9 +10,9 @@
 
 ## Progress
 
-- **Current Phase:** Phase 4 — Semantic News Retrieval
-- **Next Change:** `add-news-semantic-retrieval`
-- **Completed:** 4 / 6
+- **Current Phase:** Phase 5 — Streaming AI Responses
+- **Next Change:** `add-streaming-ai-responses`
+- **Completed:** 5 / 6
 
 ## Phases
 
@@ -50,7 +50,7 @@
 
 ### Phase 4 — Semantic News Retrieval
 
-- [ ] `add-news-semantic-retrieval`
+- [x] `add-news-semantic-retrieval`
 - **Outcome:** RAG 内部检索层使用新闻 Embedding 和向量相似度获得更强的语义召回能力。
 - **Boundary:** 只替换和增强检索层；不改变现有 RAG/Agent 对外契约，也不增加流式输出。
 - **Depends on:** `add-rag-news-qa`.
