@@ -98,6 +98,40 @@ class SettingsTest(unittest.TestCase):
         self.assertIsNone(settings.ai_agent_summary_model)
         self.assertEqual(settings.ai_agent_memory_ttl_seconds, 7200)
 
+    def test_reads_semantic_retrieval_settings_from_server_environment(self):
+        os.environ.update({
+            "EMBEDDING_BASE_URL": "http://embedding.example:8081",
+            "EMBEDDING_MODEL": "bge-large-zh-v1.5",
+            "EMBEDDING_TIMEOUT_SECONDS": "20",
+            "AI_SEMANTIC_INDEX_NAME": "idx:news:vector:v1",
+            "AI_SEMANTIC_KEY_PREFIX": "ai:news:vector:v1:",
+            "AI_SEMANTIC_VECTOR_DIMENSIONS": "1024",
+            "AI_SEMANTIC_BATCH_SIZE": "24",
+            "AI_SEMANTIC_RETRIEVAL_LIMIT": "6",
+            "AI_SEMANTIC_SCORE_THRESHOLD": "0.35",
+        })
+
+        from app.core.config import Settings
+
+        settings = Settings()
+
+        self.assertEqual(settings.embedding_base_url, "http://embedding.example:8081")
+        self.assertEqual(settings.embedding_model, "bge-large-zh-v1.5")
+        self.assertEqual(settings.embedding_timeout_seconds, 20)
+        self.assertEqual(settings.ai_semantic_index_name, "idx:news:vector:v1")
+        self.assertEqual(settings.ai_semantic_key_prefix, "ai:news:vector:v1:")
+        self.assertEqual(settings.ai_semantic_vector_dimensions, 1024)
+        self.assertEqual(settings.ai_semantic_batch_size, 24)
+        self.assertEqual(settings.ai_semantic_retrieval_limit, 6)
+        self.assertEqual(settings.ai_semantic_score_threshold, 0.35)
+
+    def test_uses_a_safe_default_batch_size_for_the_local_tei_cpu_backend(self):
+        from app.core.config import Settings
+
+        settings = Settings()
+
+        self.assertEqual(settings.ai_semantic_batch_size, 4)
+
     def test_rejects_summary_keep_window_that_is_not_smaller_than_trigger(self):
         from app.core.config import Settings
 
@@ -128,6 +162,10 @@ class SettingsTest(unittest.TestCase):
             "AI_AGENT_MEMORY_TTL_SECONDS", "AI_AGENT_MAX_ITERATIONS",
             "AI_AGENT_SUMMARY_TRIGGER_TOKENS", "AI_AGENT_SUMMARY_KEEP_TOKENS",
             "AI_AGENT_SUMMARY_MODEL",
+            "EMBEDDING_BASE_URL", "EMBEDDING_MODEL", "EMBEDDING_TIMEOUT_SECONDS",
+            "AI_SEMANTIC_INDEX_NAME", "AI_SEMANTIC_KEY_PREFIX",
+            "AI_SEMANTIC_VECTOR_DIMENSIONS", "AI_SEMANTIC_BATCH_SIZE",
+            "AI_SEMANTIC_RETRIEVAL_LIMIT", "AI_SEMANTIC_SCORE_THRESHOLD",
         ):
             os.environ.pop(key, None)
 

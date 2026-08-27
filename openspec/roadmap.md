@@ -10,9 +10,9 @@
 
 ## Progress
 
-- **Current Phase:** Phase 3.1 — Agent Short-Term Memory
-- **Next Change:** `improve-agent-short-term-memory`
-- **Completed:** 3 / 6
+- **Current Phase:** Phase 4 — Semantic News Retrieval
+- **Next Change:** `add-news-semantic-retrieval`
+- **Completed:** 4 / 6
 
 ## Phases
 
@@ -42,7 +42,7 @@
 
 ### Phase 3.1 — Agent Short-Term Memory
 
-- [ ] `improve-agent-short-term-memory`
+- [x] `improve-agent-short-term-memory`
 - **Outcome:** Agent 会话在 Token 阈值内保留原始上下文，超限时自动压缩旧消息，并在模型、持久化和响应边界过滤敏感信息。
 - **Boundary:** 仅改进短期会话记忆与隐私防护；不增加长期记忆、向量检索、写入工具或 SSE。
 - **Depends on:** `add-news-agent-tools`.

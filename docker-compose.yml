@@ -17,19 +17,44 @@ services:
       retries: 10
 
   redis:
-    image: redis:7-alpine
+    image: redis/redis-stack-server:7.4.0-v8
     container_name: toutiao-redis
     restart: unless-stopped
+    environment:
+      REDIS_ARGS: "--appendonly yes"
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 10
+
+  embedding:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+    container_name: toutiao-embedding
+    restart: unless-stopped
+    ports:
+      - "${EMBEDDING_PORT:-8081}:80"
+    command:
+      - "--model-id"
+      - "/models/bge-large-zh-v1.5"
+      - "--max-concurrent-requests"
+      - "4"
+      - "--max-batch-tokens"
+      - "4096"
+      - "--max-client-batch-size"
+      - "4"
+      - "--auto-truncate"
+    volumes:
+      - ./app/embedding/bge-large-zh-v1.5:/models/bge-large-zh-v1.5:ro
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:80/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
 
 volumes:
   mysql_data:

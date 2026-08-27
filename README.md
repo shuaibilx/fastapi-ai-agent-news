@@ -58,11 +58,11 @@ Content-Type: application/json
 { "question": "有哪些关于 AI 的新闻？" }
 ```
 
-The response `data` contains `answer` and `citations`. Each citation includes `newsId`, `title`, and `excerpt` from an article used to ground the answer. The backend first searches the `news` table with keyword retrieval; if no article matches, the answer explicitly refuses and does not call the model or fabricate a source.
+The response `data` contains `answer` and `citations`. Each citation includes `newsId`, `title`, and `excerpt` from an article used to ground the answer. The backend searches Redis Stack vectors first, then falls back to a MySQL keyword search only when the local Embedding service or vector index is unavailable. A healthy semantic search with no match returns no citation rather than mixing in unrelated keyword results.
 
 All model provider credentials stay server-side. The browser only sends the application bearer token and the question; it never stores or sends an LLM API key. The frontend AI chat page now calls `/api/ai/qa` rather than a provider endpoint directly.
 
-## Start MySQL and Redis
+## Start MySQL, Redis Stack, and Embedding
 
 ```powershell
 docker compose up -d
@@ -71,7 +71,32 @@ docker compose up -d
 This starts:
 
 - MySQL on `localhost:3306`
-- Redis on `localhost:6379`
+- Redis Stack (Redis + RediSearch) on `localhost:6379`
+- Local Text Embeddings Inference (TEI) on `localhost:8081`
+
+Before starting TEI, put the locally downloaded `bge-large-zh-v1.5` model in `app/embedding/bge-large-zh-v1.5`. This directory is intentionally ignored by Git, so each developer must prepare it locally and must not commit model binaries.
+
+Check that all services are healthy before starting the API:
+
+```powershell
+docker compose ps
+docker exec toutiao-redis redis-cli FT._LIST
+Invoke-WebRequest http://127.0.0.1:8081/health
+```
+
+If port `6379` or `8081` is occupied, set `REDIS_PORT` or `EMBEDDING_PORT` before `docker compose up -d`, and make the matching change in the backend `.env`. The application must connect to Redis Stack rather than a standard Redis server, because vector retrieval and the Agent checkpointer require RediSearch.
+
+### Build the semantic news index
+
+After MySQL, Redis Stack, and TEI are healthy, build the vectors explicitly:
+
+```powershell
+uv run python -m app.ai.rag.reindex
+```
+
+The command reads every current `news` row in configured batches and replaces only the `ai:news:vector:v1:` keys. It is safe to repeat after importing, editing, or deleting news: cache keys and Agent checkpoint keys are not cleared. With the default CPU configuration, the initial build can take a few minutes.
+
+The default TEI image is pinned to `cpu-1.9`, with batches capped at four documents. If TEI is unhealthy, first confirm the model directory and `docker compose logs embedding`; the backend will continue to answer through keyword retrieval until the semantic dependency is restored. To roll back semantic retrieval temporarily, stop the `embedding` service or point `EMBEDDING_BASE_URL` at an unavailable endpoint; no API contract changes are needed because the keyword fallback remains active.
 
 ## Build the database tables
 

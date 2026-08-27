@@ -4,7 +4,9 @@ from app.ai.rag.gateway import LangChainQaGateway, QaGateway, QaProviderUnavaila
 from app.ai.rag.retrieval import (
     NewsRecord,
     NewsRetrievalService,
+    RedisSemanticNewsSearch,
     RetrievedArticle,
+    SemanticSearchUnavailable,
     extract_match_excerpt,
     tokenize,
 )
@@ -15,11 +17,13 @@ __all__ = [
     "NewsQaResult",
     "NewsRecord",
     "NewsRetrievalService",
+    "RedisSemanticNewsSearch",
     "QaCitation",
     "QaGateway",
     "QaProviderUnavailable",
     "QaService",
     "RetrievedArticle",
+    "SemanticSearchUnavailable",
     "extract_match_excerpt",
     "tokenize",
 ]

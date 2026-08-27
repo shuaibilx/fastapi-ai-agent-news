@@ -12,12 +12,15 @@ from app.ai.agent import (
     TokenBudgetPolicy,
 )
 from app.ai.agent.safety import SensitiveDataBlocked
+from app.ai.embeddings import TeiEmbeddingClient
 from app.ai.rag import (
     LangChainQaGateway,
     NewsRetrievalService,
     QaProviderUnavailable,
     QaService,
+    RedisSemanticNewsSearch,
 )
+from app.ai.rag.vector_store import RedisNewsVectorStore
 from app.ai.summarization import (
     LangChainSummaryGateway,
     NewsSummaryService,
@@ -109,13 +112,33 @@ class SqlNewsSearch:
         return list(result.scalars().all())
 
 
+def build_news_retrieval(db: AsyncSession) -> NewsRetrievalService:
+    """Build the single retrieval implementation shared by QA and the Agent."""
+    settings = get_settings()
+    return NewsRetrievalService(
+        search_port=SqlNewsSearch(db),
+        default_limit=settings.ai_qa_retrieval_limit,
+        semantic_search=RedisSemanticNewsSearch(
+            embedding_service=TeiEmbeddingClient(
+                base_url=settings.embedding_base_url,
+                timeout_seconds=settings.embedding_timeout_seconds,
+                vector_dimensions=settings.ai_semantic_vector_dimensions,
+            ),
+            vector_store=RedisNewsVectorStore(
+                redis_client=redis_client,
+                index_name=settings.ai_semantic_index_name,
+                key_prefix=settings.ai_semantic_key_prefix,
+                vector_dimensions=settings.ai_semantic_vector_dimensions,
+            ),
+            minimum_score=settings.ai_semantic_score_threshold,
+        ),
+    )
+
+
 def get_qa_service(db: AsyncSession = Depends(get_db)) -> QaService:
     settings = get_settings()
     return QaService(
-        retrieval=NewsRetrievalService(
-            search_port=SqlNewsSearch(db),
-            default_limit=settings.ai_qa_retrieval_limit,
-        ),
+        retrieval=build_news_retrieval(db),
         gateway=LangChainQaGateway(
             base_url=settings.llm_base_url,
             api_key=settings.llm_api_key,
@@ -184,10 +207,7 @@ async def ask_news_agent(
     settings = get_settings()
     reader = SqlAgentReader(
         db,
-        NewsRetrievalService(
-            search_port=SqlNewsSearch(db),
-            default_limit=settings.ai_qa_retrieval_limit,
-        ),
+        build_news_retrieval(db),
     )
     try:
         result = await agent_service.ask(

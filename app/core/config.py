@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     ai_summary_cache_ttl_seconds: int = Field(default=60 * 60 * 24 * 30, ge=60)
     ai_qa_retrieval_limit: int = Field(default=5, ge=1, le=20)
     ai_qa_max_context_chars: int = Field(default=6000, ge=200, le=20000)
+    embedding_base_url: str = "http://127.0.0.1:8081"
+    embedding_model: str = "bge-large-zh-v1.5"
+    embedding_timeout_seconds: int = Field(default=30, ge=1, le=120)
+    ai_semantic_index_name: str = "idx:ai:news:vector:v1"
+    ai_semantic_key_prefix: str = "ai:news:vector:v1:"
+    ai_semantic_vector_dimensions: int = Field(default=1024, ge=1)
+    ai_semantic_batch_size: int = Field(default=4, ge=1, le=256)
+    ai_semantic_retrieval_limit: int = Field(default=5, ge=1, le=20)
+    ai_semantic_score_threshold: float = Field(default=0.35, ge=0, le=1)
     ai_agent_history_max_rounds: int = Field(default=5, ge=1, le=20)
     ai_agent_history_max_tokens: int = Field(default=3000, ge=100, le=100000)
     ai_agent_tool_result_max_tokens: int = Field(default=4000, ge=100, le=100000)

@@ -6,6 +6,7 @@ dependencies = [
     "aiomysql>=0.3.2",
     "cryptography>=50.0.0",
     "fastapi>=0.141.1",
+    "httpx>=0.28.1",
     "langchain>=1.0.0,<2",
     "langchain-deepseek>=1.1.0",
     "langchain-openai>=1.6.0",
