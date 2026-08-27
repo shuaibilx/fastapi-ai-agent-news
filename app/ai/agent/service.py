@@ -1,20 +1,18 @@
 """Application orchestration for the authenticated news agent."""
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
+from langchain.agents.middleware.pii import PIIDetectionError
 from langchain.messages import AIMessage, HumanMessage
 from langgraph.errors import GraphRecursionError
 
-from app.ai.agent.memory import (
-    ConversationTurn,
-    TokenBudgetPolicy,
-    normalize_conversation_id,
-)
-from app.ai.agent.memory_store import ConversationMemoryStore, MemoryStatus
+from app.ai.agent.memory import normalize_conversation_id
+from app.ai.agent.memory_runtime import AgentMemorySession, CheckpointerMemoryRuntime
+from app.ai.agent.memory_store import MemoryStatus
 from app.ai.agent.results import AgentCitation, AgentToolSummary, collect_tool_metadata
+from app.ai.agent.safety import SensitiveDataBlocked, sanitize_text
 from app.ai.agent.tools import AgentReadPort, AgentRuntimeContext
 
 
@@ -50,16 +48,14 @@ class AgentService:
         self,
         *,
         runner: AgentRunner,
-        memory_store: ConversationMemoryStore,
-        budget_policy: TokenBudgetPolicy,
+        memory_runtime: CheckpointerMemoryRuntime,
         max_iterations: int,
         retrieval_limit: int,
         page_size_limit: int,
         tool_result_max_tokens: int,
     ):
         self._runner = runner
-        self._memory_store = memory_store
-        self._budget_policy = budget_policy
+        self._memory_runtime = memory_runtime
         self._max_iterations = max_iterations
         self._retrieval_limit = retrieval_limit
         self._page_size_limit = page_size_limit
@@ -75,18 +71,24 @@ class AgentService:
     ) -> AgentResult:
         normalized_message = message.strip()
         conversation_id = normalize_conversation_id(conversation_id)
-        loaded = await self._memory_store.load(user_id, conversation_id)
-        history = self._budget_policy.select_history(
-            loaded.turns,
-            current_message=normalized_message,
+
+        return await self._ask_with_checkpointer(
+            user_id=user_id,
+            message=normalized_message,
+            conversation_id=conversation_id,
+            reader=reader,
         )
 
-        messages: list[Any] = []
-        for turn in history:
-            messages.append(HumanMessage(content=turn.user_message))
-            messages.append(AIMessage(content=turn.assistant_message))
-        messages.append(HumanMessage(content=normalized_message))
-
+    async def _ask_with_checkpointer(
+        self,
+        *,
+        user_id: int,
+        message: str,
+        conversation_id: str,
+        reader: AgentReadPort,
+    ) -> AgentResult:
+        session: AgentMemorySession = await self._memory_runtime.prepare(user_id, conversation_id)
+        safe_message = sanitize_text(message)
         runtime_context = AgentRuntimeContext(
             user_id=user_id,
             reader=reader,
@@ -94,12 +96,17 @@ class AgentService:
             page_size_limit=self._page_size_limit,
             tool_result_max_tokens=self._tool_result_max_tokens,
         )
+        config = {"recursion_limit": self._max_iterations * 2 + 3, **session.config}
         try:
             output = await self._runner.ainvoke(
-                {"messages": messages},
+                {"messages": [HumanMessage(content=safe_message)]},
                 context=runtime_context,
-                config={"recursion_limit": self._max_iterations * 2 + 3},
+                config=config,
             )
+        except (SensitiveDataBlocked, PIIDetectionError) as exc:
+            if isinstance(exc, PIIDetectionError):
+                raise SensitiveDataBlocked(exc.pii_type) from exc
+            raise
         except (GraphRecursionError, ModelCallLimitExceededError) as exc:
             raise AgentExecutionLimitExceeded("Agent 超出允许的执行轮次") from exc
         except Exception as exc:
@@ -116,22 +123,15 @@ class AgentService:
         if final_message is None:
             raise AgentProviderUnavailable("模型未返回可用回答")
 
-        answer = final_message.content.strip()
-        citations, tool_calls = collect_tool_metadata(output_messages)
-        append_status = await self._memory_store.append(
-            user_id,
-            conversation_id,
-            ConversationTurn(
-                user_message=normalized_message,
-                assistant_message=answer,
-                completed_at=datetime.now(timezone.utc).isoformat(),
-            ),
-        )
-        memory_status = (
-            MemoryStatus.UNAVAILABLE
-            if MemoryStatus.UNAVAILABLE in {loaded.status, append_status}
-            else loaded.status
-        )
+        try:
+            answer = sanitize_text(final_message.content.strip())
+            citations, tool_calls = collect_tool_metadata(output_messages)
+        except SensitiveDataBlocked:
+            raise
+
+        memory_status = session.status
+        if memory_status is not MemoryStatus.UNAVAILABLE:
+            memory_status = await self._memory_runtime.verify_saved(session)
         return AgentResult(
             answer=answer,
             conversation_id=conversation_id,

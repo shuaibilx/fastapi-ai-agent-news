@@ -52,3 +52,12 @@ def test_collect_tool_metadata_ignores_untrusted_or_malformed_artifacts():
 
     assert citations == []
     assert summaries == []
+
+
+def test_collect_tool_metadata_redacts_personal_information_in_artifacts():
+    message = tool_message("call-4", news_id=13, title="联系 alice@example.com")
+
+    citations, summaries = collect_tool_metadata([message])
+
+    assert citations[0].title != "联系 alice@example.com"
+    assert "alice@example.com" not in repr((citations, summaries))

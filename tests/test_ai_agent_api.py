@@ -4,13 +4,17 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from app.ai.agent.memory import ContextWindowExceeded
+from app.ai.agent.memory_runtime import AgentMemorySession
 from app.ai.agent.memory_store import MemoryStatus
 from app.ai.agent.results import AgentCitation, AgentToolSummary
 from app.ai.agent.service import (
     AgentExecutionLimitExceeded,
     AgentProviderUnavailable,
     AgentResult,
+    AgentService,
 )
+from app.ai.agent.memory_store import MemoryStatus
+from langchain.messages import AIMessage
 from app.api.routers.ai import get_agent_service
 from app.core.auth import get_current_user
 from app.core.database import get_db
@@ -138,6 +142,37 @@ class AgentApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.json()["code"], 422)
+
+    def test_agent_endpoint_returns_safe_validation_error_for_credentials(self):
+        class Runtime:
+            async def prepare(self, *_args):
+                return AgentMemorySession(MemoryStatus.EMPTY, {}, None)
+
+            async def verify_saved(self, *_args):
+                return MemoryStatus.UNAVAILABLE
+
+        class Runner:
+            async def ainvoke(self, *_args, **_kwargs):
+                raise AssertionError("credential input must not reach runner")
+
+        app.dependency_overrides[get_agent_service] = lambda: AgentService(
+            runner=Runner(),
+            memory_runtime=Runtime(),
+            max_iterations=4,
+            retrieval_limit=5,
+            page_size_limit=10,
+            tool_result_max_tokens=500,
+        )
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/ai/agent",
+                json={"message": "api key: sk-test-12345678901234567890"},
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["code"], 422)
+        self.assertIn("敏感凭据", response.json()["message"])
 
 
 if __name__ == "__main__":

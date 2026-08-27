@@ -1,10 +1,29 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routers import ai, news, users, favorite, history
 from app.core.exception_handlers import register_exception_handlers
+from app.ai.agent.checkpointer import RedisCheckpointManager
+from app.core.config import get_settings
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    settings = get_settings()
+    manager = RedisCheckpointManager(
+        settings.agent_checkpointer_redis_url,
+        ttl_seconds=settings.ai_agent_memory_ttl_seconds,
+    )
+    await manager.initialize()
+    application.state.agent_checkpoint_manager = manager
+    try:
+        yield
+    finally:
+        await manager.close()
+
+app = FastAPI(lifespan=lifespan)
 
 # 注册全局异常处理器
 register_exception_handlers(app)

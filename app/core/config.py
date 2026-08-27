@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Optional
 
-from pydantic import Field, computed_field
+from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,8 +38,19 @@ class Settings(BaseSettings):
     ai_agent_history_max_tokens: int = Field(default=3000, ge=100, le=100000)
     ai_agent_tool_result_max_tokens: int = Field(default=4000, ge=100, le=100000)
     ai_agent_input_max_tokens: int = Field(default=10000, ge=1000, le=200000)
+    ai_agent_summary_trigger_tokens: int = Field(default=6000, ge=100, le=200000)
+    ai_agent_summary_keep_tokens: int = Field(default=2500, ge=1, le=200000)
+    ai_agent_summary_model: Optional[str] = None
     ai_agent_memory_ttl_seconds: int = Field(default=86400, ge=60)
     ai_agent_max_iterations: int = Field(default=6, ge=1, le=20)
+
+    @model_validator(mode="after")
+    def validate_agent_token_budgets(self):
+        if self.ai_agent_summary_keep_tokens >= self.ai_agent_summary_trigger_tokens:
+            raise ValueError("ai_agent_summary_keep_tokens 必须小于 ai_agent_summary_trigger_tokens")
+        if self.ai_agent_summary_trigger_tokens >= self.ai_agent_input_max_tokens:
+            raise ValueError("ai_agent_summary_trigger_tokens 必须小于 ai_agent_input_max_tokens")
+        return self
 
     @computed_field
     @property
@@ -55,6 +66,13 @@ class Settings(BaseSettings):
     def redis_url(self) -> str:
         auth = f":{self.redis_password}@" if self.redis_password else ""
         return f"redis://{auth}{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+    @computed_field
+    @property
+    def agent_checkpointer_redis_url(self) -> str:
+        """RediSearch requires its indexes to live in Redis database 0."""
+        auth = f":{self.redis_password}@" if self.redis_password else ""
+        return f"redis://{auth}{self.redis_host}:{self.redis_port}/0"
 
 
 @lru_cache

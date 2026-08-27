@@ -6,6 +6,8 @@ from typing import Any, Iterable
 from langchain.messages import ToolMessage
 from langchain_core.messages import BaseMessage
 
+from app.ai.agent.safety import sanitize_value
+
 
 @dataclass(frozen=True)
 class AgentCitation:
@@ -31,7 +33,7 @@ def collect_tool_metadata(
     for message in messages:
         if not isinstance(message, ToolMessage) or not isinstance(message.artifact, dict):
             continue
-        artifact: dict[str, Any] = message.artifact
+        artifact: dict[str, Any] = sanitize_value(message.artifact)
 
         raw_citations = artifact.get("citations")
         if isinstance(raw_citations, list):

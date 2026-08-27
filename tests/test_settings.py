@@ -26,6 +26,10 @@ class SettingsTest(unittest.TestCase):
             "mysql+aiomysql://app:secret@db.example:3307/toutiao?charset=utf8mb4",
         )
         self.assertEqual(settings.redis_url, "redis://cache.example:6380/2")
+        self.assertEqual(
+            settings.agent_checkpointer_redis_url,
+            "redis://cache.example:6380/0",
+        )
 
     def test_reads_ai_summary_settings_from_server_environment(self):
         os.environ.update({
@@ -78,6 +82,41 @@ class SettingsTest(unittest.TestCase):
                 ai_agent_max_iterations=0,
             )
 
+    def test_reads_token_memory_settings_and_allows_optional_summary_model(self):
+        from app.core.config import Settings
+
+        settings = Settings(
+            ai_agent_summary_trigger_tokens=6000,
+            ai_agent_summary_keep_tokens=2500,
+            ai_agent_summary_model=None,
+            ai_agent_input_max_tokens=10000,
+            ai_agent_memory_ttl_seconds=7200,
+        )
+
+        self.assertEqual(settings.ai_agent_summary_trigger_tokens, 6000)
+        self.assertEqual(settings.ai_agent_summary_keep_tokens, 2500)
+        self.assertIsNone(settings.ai_agent_summary_model)
+        self.assertEqual(settings.ai_agent_memory_ttl_seconds, 7200)
+
+    def test_rejects_summary_keep_window_that_is_not_smaller_than_trigger(self):
+        from app.core.config import Settings
+
+        with self.assertRaises(ValidationError):
+            Settings(
+                ai_agent_summary_trigger_tokens=3000,
+                ai_agent_summary_keep_tokens=3000,
+            )
+
+    def test_rejects_summary_trigger_that_exceeds_input_budget(self):
+        from app.core.config import Settings
+
+        with self.assertRaises(ValidationError):
+            Settings(
+                ai_agent_summary_trigger_tokens=10000,
+                ai_agent_summary_keep_tokens=4000,
+                ai_agent_input_max_tokens=10000,
+            )
+
     def tearDown(self):
         for key in (
             "MYSQL_HOST", "MYSQL_PORT", "MYSQL_USER", "MYSQL_PASSWORD",
@@ -87,6 +126,8 @@ class SettingsTest(unittest.TestCase):
             "AI_AGENT_HISTORY_MAX_ROUNDS", "AI_AGENT_HISTORY_MAX_TOKENS",
             "AI_AGENT_TOOL_RESULT_MAX_TOKENS", "AI_AGENT_INPUT_MAX_TOKENS",
             "AI_AGENT_MEMORY_TTL_SECONDS", "AI_AGENT_MAX_ITERATIONS",
+            "AI_AGENT_SUMMARY_TRIGGER_TOKENS", "AI_AGENT_SUMMARY_KEEP_TOKENS",
+            "AI_AGENT_SUMMARY_MODEL",
         ):
             os.environ.pop(key, None)
 

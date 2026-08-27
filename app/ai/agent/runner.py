@@ -19,6 +19,10 @@ class LangChainNewsAgentRunner:
         max_iterations: int,
         max_input_tokens: int,
         tool_result_max_tokens: int,
+        summary_trigger_tokens: int = 6000,
+        summary_keep_tokens: int = 2500,
+        summary_model: str | None = None,
+        checkpointer: Any | None = None,
     ):
         self._base_url = base_url
         self._api_key = api_key
@@ -27,6 +31,10 @@ class LangChainNewsAgentRunner:
         self._max_iterations = max_iterations
         self._max_input_tokens = max_input_tokens
         self._tool_result_max_tokens = tool_result_max_tokens
+        self._summary_trigger_tokens = summary_trigger_tokens
+        self._summary_keep_tokens = summary_keep_tokens
+        self._summary_model_name = summary_model
+        self._checkpointer = checkpointer
         self._agent = None
 
     def _get_agent(self):
@@ -45,6 +53,20 @@ class LangChainNewsAgentRunner:
                 max_iterations=self._max_iterations,
                 max_input_tokens=self._max_input_tokens,
                 tool_result_max_tokens=self._tool_result_max_tokens,
+                summary_trigger_tokens=self._summary_trigger_tokens,
+                summary_keep_tokens=self._summary_keep_tokens,
+                summary_model=(
+                    ChatDeepSeek(
+                        base_url=self._base_url,
+                        api_key=self._api_key,
+                        model=self._summary_model_name,
+                        timeout=self._timeout_seconds,
+                        temperature=0,
+                    )
+                    if self._summary_model_name
+                    else None
+                ),
+                checkpointer=self._checkpointer,
             )
         return self._agent
 

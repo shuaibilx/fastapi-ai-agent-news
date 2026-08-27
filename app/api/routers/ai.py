@@ -1,16 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agent import (
     AgentExecutionLimitExceeded,
     AgentProviderUnavailable,
     AgentService,
+    CheckpointerMemoryRuntime,
     ContextWindowExceeded,
-    ConversationMemoryStore,
     LangChainNewsAgentRunner,
     SqlAgentReader,
     TokenBudgetPolicy,
 )
+from app.ai.agent.safety import SensitiveDataBlocked
 from app.ai.rag import (
     LangChainQaGateway,
     NewsRetrievalService,
@@ -124,8 +125,10 @@ def get_qa_service(db: AsyncSession = Depends(get_db)) -> QaService:
     )
 
 
-def get_agent_service() -> AgentService:
+def get_agent_service(request: Request) -> AgentService:
     settings = get_settings()
+    checkpoint_manager = getattr(request.app.state, "agent_checkpoint_manager", None)
+    checkpointer = checkpoint_manager.checkpointer if checkpoint_manager else None
     return AgentService(
         runner=LangChainNewsAgentRunner(
             base_url=settings.llm_base_url,
@@ -135,16 +138,13 @@ def get_agent_service() -> AgentService:
             max_iterations=settings.ai_agent_max_iterations,
             max_input_tokens=settings.ai_agent_input_max_tokens,
             tool_result_max_tokens=settings.ai_agent_tool_result_max_tokens,
+            summary_trigger_tokens=settings.ai_agent_summary_trigger_tokens,
+            summary_keep_tokens=settings.ai_agent_summary_keep_tokens,
+            summary_model=settings.ai_agent_summary_model,
+            checkpointer=checkpointer,
         ),
-        memory_store=ConversationMemoryStore(
-            redis_client,
-            ttl_seconds=settings.ai_agent_memory_ttl_seconds,
-            max_rounds=settings.ai_agent_history_max_rounds,
-        ),
-        budget_policy=TokenBudgetPolicy(
-            max_rounds=settings.ai_agent_history_max_rounds,
-            max_history_tokens=settings.ai_agent_history_max_tokens,
-            max_input_tokens=settings.ai_agent_input_max_tokens,
+        memory_runtime=CheckpointerMemoryRuntime(
+            lambda: checkpoint_manager.checkpointer if checkpoint_manager else None,
         ),
         max_iterations=settings.ai_agent_max_iterations,
         retrieval_limit=settings.ai_qa_retrieval_limit,
@@ -200,6 +200,8 @@ async def ask_news_agent(
         )
     except ContextWindowExceeded as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except SensitiveDataBlocked:
+        raise HTTPException(status_code=422, detail="请求包含不允许提交的敏感凭据") from None
     except (AgentProviderUnavailable, AgentExecutionLimitExceeded) as exc:
         raise HTTPException(status_code=503, detail="Agent 服务暂时不可用") from exc
 
