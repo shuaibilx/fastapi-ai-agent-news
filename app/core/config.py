@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     redis_db: int = 0
     redis_password: Optional[str] = None
 
+    news_category_cache_ttl_seconds: int = Field(default=7200, ge=1)
+    news_list_cache_ttl_seconds: int = Field(default=1800, ge=1)
+    news_list_empty_cache_ttl_seconds: int = Field(default=60, ge=1)
+    news_cache_ttl_jitter_seconds: int = Field(default=180, ge=0)
+
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str = ""
     llm_model: str = ""

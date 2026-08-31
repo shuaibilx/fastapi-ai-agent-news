@@ -202,14 +202,40 @@ tests/                 Configuration tests
 
 ## Cache behavior
 
-News list reads use a cache-aside flow:
+News categories and lists use a versioned Cache-Aside flow. News lists have a
+stable `publish_time DESC, id DESC` order. Each cached page contains `list`,
+`total`, and `hasMore` from the same database read, so a cache hit never mixes
+an old list with a newly calculated count.
 
-1. Build a cache key from category, page, and page size.
-2. Return the cached JSON data when available.
-3. Query MySQL on a cache miss.
-4. Serialize the result and store it in Redis with a TTL.
+1. Read the current Redis generation for the category.
+2. Build a key from category, generation, page, and page size.
+3. Return the cached JSON response when available; on a miss, query MySQL and
+   cache the full response.
+4. After a committed news create/delete/category move/order-affecting update,
+   increment the affected category generation. Old page keys are no longer
+   read and expire naturally.
 
-Redis is treated as an optimization. If Redis is unavailable, the API falls back to MySQL for cache reads and writes.
+Normal page TTL is 30 minutes with bounded random jitter. Empty pages use a
+shorter TTL to reduce repeated database reads without making an empty result
+durable. List-page `views` values are intentionally eventually consistent:
+reading a news detail increments MySQL but does not invalidate every page in a
+category.
+
+Redis is treated as an optimization. If Redis is unavailable, the API falls
+back to MySQL for cache reads and writes. Application news/category write paths
+must invalidate the relevant generation *after* the database transaction has
+committed. Direct SQL and imports cannot be detected automatically; after them,
+run the controlled maintenance command with the affected categories:
+
+```powershell
+uv run python -m app.cache.news_cache_maintenance --category-id 2 --include-categories
+```
+
+Repeat `--category-id` for every affected category. The command touches only
+the `news:*` cache-generation keys; it does not rebuild news vectors, remove
+AI summaries, or clear Agent checkpoints. Rebuild vectors separately after
+news content changes with `uv run python -m app.ai.rag.reindex` until the
+incremental vector-index synchronization Change is implemented.
 
 ## Front-end
 
