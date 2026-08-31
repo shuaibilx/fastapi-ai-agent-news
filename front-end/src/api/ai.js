@@ -49,7 +49,9 @@ function parseSseBlock(block) {
 export async function consumeSseResponse(response, { onEvent, signal } = {}) {
   if (!response.ok) {
     const detail = await response.text()
-    throw new Error(`SSE request failed (${response.status}): ${detail || 'unknown error'}`)
+    const error = new Error(`SSE request failed (${response.status}): ${detail || 'unknown error'}`)
+    error.status = response.status
+    throw error
   }
   if (!response.body) throw new Error('SSE response body is unavailable')
 

@@ -68,15 +68,19 @@
 
 <script setup>
 import { ref, onMounted, nextTick, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import TabBar from '../components/TabBar.vue';
 import { showToast } from 'vant';
 import * as marked from 'marked';
 import DOMPurify from 'dompurify';
 import { streamNewsAgent } from '../api/ai';
 import { readConversationId } from '../api/agentConversation';
+import { createIncrementalTextRenderer } from '../api/streamTextRenderer';
 import { useUserStore } from '../store/user';
+import { appendChatMessage } from '../utils/chatMessages';
 
 const userStore = useUserStore();
+const router = useRouter();
 
 // 聊天消息
 const createWelcomeMessage = () => ({
@@ -113,19 +117,21 @@ const sendMessage = async () => {
   messages.value.push({ role: 'user', content: userMessage, citations: [], toolCalls: [] });
   userInput.value = '';
 
-  const assistantMessage = {
+  const assistantMessage = appendChatMessage(messages, {
     role: 'assistant',
     content: '',
     citations: [],
     toolCalls: [],
     memoryStatus: 'empty',
-  };
-  messages.value.push(assistantMessage);
+  });
 
   await nextTick();
   scrollToBottom();
 
   const controller = new AbortController();
+  const textRenderer = createIncrementalTextRenderer((text) => {
+    assistantMessage.content += text;
+  });
   streamController.value = controller;
   let completed = false;
   isLoading.value = true;
@@ -141,7 +147,7 @@ const sendMessage = async () => {
             conversationId.value = readConversationId(data);
             assistantMessage.memoryStatus = data.memoryStatus || 'empty';
           } else if (event === 'delta') {
-            assistantMessage.content += data.text || '';
+            textRenderer.enqueue(data.text || '');
           } else if (event === 'tool') {
             assistantMessage.toolCalls.push(data);
           } else if (event === 'citation') {
@@ -159,13 +165,22 @@ const sendMessage = async () => {
       },
     );
     if (!completed) throw new Error('AI 流在完成前中断');
+    await textRenderer.whenIdle();
   } catch (error) {
     console.error('AI Agent 请求失败:', error);
     if (error.name === 'AbortError') {
+      textRenderer.stop();
       assistantMessage.content = assistantMessage.content
         ? `${assistantMessage.content}\n\n_已停止生成。_`
         : '已停止生成。';
+    } else if (error.status === 401) {
+      textRenderer.stop();
+      userStore.logout();
+      messages.value.pop();
+      showToast({ message: '登录已失效，请重新登录', position: 'bottom' });
+      await router.replace('/login');
     } else {
+      await textRenderer.whenIdle();
       assistantMessage.content = assistantMessage.content ||
         error.message || '问答服务暂时不可用，请稍后重试';
     }

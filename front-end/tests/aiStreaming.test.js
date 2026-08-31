@@ -41,8 +41,12 @@ test('SSE consumer rejects server error events and HTTP errors', async () => {
   )
 
   await assert.rejects(
-    consumeSseResponse(new Response('bad gateway', { status: 502 }), { onEvent: () => {} }),
-    /502/,
+    consumeSseResponse(new Response('登录令牌无效', { status: 401 }), { onEvent: () => {} }),
+    (error) => {
+      assert.equal(error.status, 401)
+      assert.match(error.message, /401/)
+      return true
+    },
   )
 })
 
