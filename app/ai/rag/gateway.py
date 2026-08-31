@@ -1,5 +1,6 @@
 """Provider boundary for grounded news question answering."""
 
+from collections.abc import AsyncIterator
 from typing import Protocol
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -12,6 +13,8 @@ class QaProviderUnavailable(Exception):
 
 class QaGateway(Protocol):
     async def answer(self, question: str, context: str) -> str: ...
+
+    def stream_answer(self, question: str, context: str) -> AsyncIterator[str]: ...
 
 
 class LangChainQaGateway:
@@ -31,6 +34,27 @@ class LangChainQaGateway:
         self._timeout_seconds = timeout_seconds
 
     async def answer(self, question: str, context: str) -> str:
+        model, messages = self._build_request(question, context)
+        try:
+            response = await model.ainvoke(messages)
+        except Exception as exc:
+            raise QaProviderUnavailable("问答服务暂时不可用") from exc
+        answer = str(getattr(response, "content", "")).strip()
+        if not answer:
+            raise QaProviderUnavailable("模型返回了空回答")
+        return answer
+
+    async def stream_answer(self, question: str, context: str) -> AsyncIterator[str]:
+        model, messages = self._build_request(question, context)
+        try:
+            async for chunk in model.astream(messages):
+                content = getattr(chunk, "content", None)
+                if isinstance(content, str) and content:
+                    yield content
+        except Exception as exc:
+            raise QaProviderUnavailable("问答服务暂时不可用") from exc
+
+    def _build_request(self, question: str, context: str):
         if not self._api_key or not self._model:
             raise QaProviderUnavailable("未配置模型服务")
 
@@ -50,12 +74,5 @@ class LangChainQaGateway:
             ),
             HumanMessage(content=f"新闻资料：\n{context}\n\n用户问题：{question}"),
         ]
-        try:
-            response = await model.ainvoke(messages)
-        except Exception as exc:
-            raise QaProviderUnavailable("问答服务暂时不可用") from exc
-        answer = response.content
-        if not answer or not str(answer).strip():
-            raise QaProviderUnavailable("模型返回了空回答")
-        return str(answer).strip()
+        return model, messages
 

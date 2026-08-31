@@ -31,8 +31,12 @@ async def get_history_list(db: AsyncSession, user_id: int, page: int = 1, page_s
     return res.all(), total
 
 
-async def delete_history(db: AsyncSession, user_id: int, news_id: int):
-    stmt = delete(History).where(History.user_id == user_id).where(History.news_id == news_id)  # sql语句对象
+async def delete_history(db: AsyncSession, user_id: int, history_id: int):
+    """Delete exactly one history record that belongs to the authenticated user."""
+    stmt = delete(History).where(
+        History.user_id == user_id,
+        History.id == history_id,
+    )
     res = await db.execute(stmt)
     await db.commit()
     # await db.refresh() 只能针对ORM对象

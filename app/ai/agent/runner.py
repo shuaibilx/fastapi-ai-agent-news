@@ -1,5 +1,6 @@
 """Lazy provider-backed LangChain runner for the news agent."""
 
+from collections.abc import AsyncIterator
 from typing import Any
 
 from langchain_deepseek import ChatDeepSeek
@@ -78,3 +79,18 @@ class LangChainNewsAgentRunner:
         config: dict[str, Any],
     ) -> dict[str, Any]:
         return await self._get_agent().ainvoke(payload, context=context, config=config)
+
+    async def astream_events(
+        self,
+        payload: dict[str, Any],
+        *,
+        context: AgentRuntimeContext,
+        config: dict[str, Any],
+    ) -> AsyncIterator[dict[str, Any]]:
+        async for event in self._get_agent().astream_events(
+            payload,
+            context=context,
+            config=config,
+            version="v2",
+        ):
+            yield event

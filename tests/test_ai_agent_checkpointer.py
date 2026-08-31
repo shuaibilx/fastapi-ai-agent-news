@@ -1,6 +1,6 @@
 import asyncio
 from uuid import UUID
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -125,5 +125,29 @@ def test_application_lifespan_owns_checkpointer_lifecycle():
                 manager = app.state.agent_checkpoint_manager
                 assert manager.initialized == 1
             assert manager.closed == 1
+
+    asyncio.run(scenario())
+
+
+def test_application_lifespan_disposes_database_engine():
+    class FakeManager:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def initialize(self):
+            return True
+
+        async def close(self):
+            return None
+
+    async def scenario():
+        fake_engine = type("FakeEngine", (), {"dispose": AsyncMock()})()
+        with (
+            patch("app.main.RedisCheckpointManager", FakeManager),
+            patch("app.main.async_engine", fake_engine),
+        ):
+            async with lifespan(app):
+                pass
+        fake_engine.dispose.assert_awaited_once()
 
     asyncio.run(scenario())

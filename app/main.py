@@ -1,12 +1,15 @@
+# .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routers import ai, news, users, favorite, history
-from app.core.exception_handlers import register_exception_handlers
 from app.ai.agent.checkpointer import RedisCheckpointManager
+from app.api.routers import ai, news, users, favorite, history
 from app.core.config import get_settings
+from app.core.database import async_engine
+from app.core.exception_handlers import register_exception_handlers
 
 
 @asynccontextmanager
@@ -16,12 +19,16 @@ async def lifespan(application: FastAPI):
         settings.agent_checkpointer_redis_url,
         ttl_seconds=settings.ai_agent_memory_ttl_seconds,
     )
-    await manager.initialize()
     application.state.agent_checkpoint_manager = manager
     try:
+        await manager.initialize()
         yield
     finally:
-        await manager.close()
+        try:
+            await manager.close()
+        finally:
+            await async_engine.dispose()
+
 
 app = FastAPI(lifespan=lifespan)
 

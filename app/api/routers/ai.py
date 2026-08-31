@@ -1,4 +1,8 @@
+import asyncio
+from collections.abc import AsyncIterator
+
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agent import (
@@ -27,6 +31,7 @@ from app.ai.summarization import (
     SummaryCache,
     SummaryProviderUnavailable,
 )
+from app.ai.streaming import SseEventEncoder, StreamEvent, iter_sse_events
 from app.core.auth import get_current_user
 from app.core.cache import redis_client
 from app.core.config import get_settings
@@ -47,6 +52,33 @@ from app.services import news
 
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
+
+
+def sse_response(
+    request: Request,
+    events: AsyncIterator[StreamEvent],
+    *,
+    error_message: str,
+) -> StreamingResponse:
+    async def body() -> AsyncIterator[str]:
+        try:
+            async for chunk in iter_sse_events(events, is_disconnected=request.is_disconnected):
+                yield chunk
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if not await request.is_disconnected():
+                yield SseEventEncoder().encode(StreamEvent.error(error_message))
+
+    return StreamingResponse(
+        body(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def get_news_summary_service() -> NewsSummaryService:
@@ -197,6 +229,20 @@ async def ask_news_question(
     return success_response(message="获取新闻回答成功", data=response_data)
 
 
+@router.post("/qa/stream")
+async def stream_news_question(
+    payload: QaRequest,
+    request: Request,
+    _: User = Depends(get_current_user),
+    qa_service: QaService = Depends(get_qa_service),
+):
+    return sse_response(
+        request,
+        qa_service.stream(payload.question),
+        error_message="问答服务暂时不可用",
+    )
+
+
 @router.post("/agent")
 async def ask_news_agent(
     payload: AgentRequest,
@@ -247,3 +293,37 @@ async def ask_news_agent(
         memoryStatus=result.memory_status.value,
     )
     return success_response(message="获取 Agent 回答成功", data=response_data)
+
+
+@router.post("/agent/stream")
+async def stream_news_agent(
+    payload: AgentRequest,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    agent_service: AgentService = Depends(get_agent_service),
+):
+    try:
+        # Perform credential screening before headers commit the response as SSE.
+        agent_service.validate_input(
+            payload.message,
+            str(payload.conversation_id) if payload.conversation_id is not None else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except SensitiveDataBlocked:
+        raise HTTPException(status_code=422, detail="请求包含不允许提交的敏感凭据") from None
+
+    reader = SqlAgentReader(db, build_news_retrieval(db))
+    return sse_response(
+        request,
+        agent_service.stream(
+            user_id=user.id,
+            message=payload.message,
+            conversation_id=(
+                str(payload.conversation_id) if payload.conversation_id is not None else None
+            ),
+            reader=reader,
+        ),
+        error_message="Agent 服务暂时不可用",
+    )

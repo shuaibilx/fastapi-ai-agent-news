@@ -109,25 +109,30 @@ export const useHistoryStore = defineStore('history', {
     },
 
     // 删除单条浏览历史
-    removeHistory(id) {
-      this.history = this.history.filter(item => item.id !== id);
+    removeHistory(historyId) {
+      this.history = this.history.filter(item => item.historyId !== historyId);
+      this.saveHistory();
+    },
+
+    removeLocalHistory(newsId) {
+      this.history = this.history.filter(item => item.id !== newsId);
       this.saveHistory();
     },
 
     // 删除单条浏览历史 - API请求
-    async removeHistoryApi(id) {
+    async removeHistoryApi(historyId) {
       const userStore = useUserStore();
 
       // 检查用户是否登录
       if (!userStore.getLoginStatus) {
         console.log('删除浏览历史API：用户未登录，使用本地操作');
-        this.removeHistory(id);
+        this.removeLocalHistory(historyId);
         return { success: true, isLocal: true };
       }
 
       try {
-        console.log('删除浏览历史API：开始请求', id);
-        const response = await axios.delete(`${apiConfig.baseURL}/api/history/delete/${id}`, {
+        console.log('删除浏览历史API：开始请求', historyId);
+        const response = await axios.delete(`${apiConfig.baseURL}/api/history/delete/${historyId}`, {
           headers: {
             Authorization: `Bearer ${userStore.token}`
           }
@@ -136,7 +141,7 @@ export const useHistoryStore = defineStore('history', {
         if (response.data.code === 200) {
           console.log('删除浏览历史API：删除成功');
           // 更新本地历史记录
-          this.removeHistory(id);
+          this.removeHistory(historyId);
           return { success: true };
         } else {
           console.error('删除浏览历史API：请求失败', response.data.message);

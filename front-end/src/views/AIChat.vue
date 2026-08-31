@@ -54,10 +54,10 @@
         <van-button 
           type="primary" 
           class="send-button" 
-          :disabled="isLoading || !userInput.trim()" 
-          @click="sendMessage"
+          :disabled="!isLoading && !userInput.trim()"
+          @click="isLoading ? stopGeneration() : sendMessage()"
         >
-          发送
+          {{ isLoading ? '停止生成' : '发送' }}
         </van-button>
       </div>
     </div>
@@ -72,7 +72,7 @@ import TabBar from '../components/TabBar.vue';
 import { showToast } from 'vant';
 import * as marked from 'marked';
 import DOMPurify from 'dompurify';
-import { askNewsAgent } from '../api/ai';
+import { streamNewsAgent } from '../api/ai';
 import { readConversationId } from '../api/agentConversation';
 import { useUserStore } from '../store/user';
 
@@ -92,6 +92,7 @@ const userInput = ref('');
 const messagesContainer = ref(null);
 const isLoading = ref(false);
 const conversationId = ref(null);
+const streamController = ref(null);
 
 // 格式化消息内容（支持Markdown）
 const formatMessage = (content) => {
@@ -112,46 +113,74 @@ const sendMessage = async () => {
   messages.value.push({ role: 'user', content: userMessage, citations: [], toolCalls: [] });
   userInput.value = '';
 
-  // 添加AI消息占位
-  messages.value.push({
+  const assistantMessage = {
     role: 'assistant',
     content: '',
     citations: [],
     toolCalls: [],
     memoryStatus: 'empty',
-  });
+  };
+  messages.value.push(assistantMessage);
 
   await nextTick();
   scrollToBottom();
 
+  const controller = new AbortController();
+  streamController.value = controller;
+  let completed = false;
   isLoading.value = true;
   try {
-    const response = await askNewsAgent(
+    await streamNewsAgent(
       userMessage,
       conversationId.value,
       userStore.token,
+      {
+        signal: controller.signal,
+        onEvent: ({ event, data }) => {
+          if (event === 'meta' && data.conversationId) {
+            conversationId.value = readConversationId(data);
+            assistantMessage.memoryStatus = data.memoryStatus || 'empty';
+          } else if (event === 'delta') {
+            assistantMessage.content += data.text || '';
+          } else if (event === 'tool') {
+            assistantMessage.toolCalls.push(data);
+          } else if (event === 'citation') {
+            if (!assistantMessage.citations.some((item) => item.newsId === data.newsId)) {
+              assistantMessage.citations.push(data);
+            }
+          } else if (event === 'done') {
+            completed = true;
+            conversationId.value = readConversationId(data);
+            assistantMessage.citations = data.citations || assistantMessage.citations;
+            assistantMessage.toolCalls = data.toolCalls || assistantMessage.toolCalls;
+            assistantMessage.memoryStatus = data.memoryStatus || assistantMessage.memoryStatus;
+          }
+        },
+      },
     );
-
-    if (response.code !== 200) {
-      throw new Error(response.message || 'Agent 请求失败');
-    }
-
-    const responseData = response.data;
-    conversationId.value = readConversationId(responseData);
-    const assistantMessage = messages.value[messages.value.length - 1];
-    assistantMessage.content = responseData.answer;
-    assistantMessage.citations = responseData.citations || [];
-    assistantMessage.toolCalls = responseData.toolCalls || [];
-    assistantMessage.memoryStatus = responseData.memoryStatus || 'empty';
+    if (!completed) throw new Error('AI 流在完成前中断');
   } catch (error) {
     console.error('AI Agent 请求失败:', error);
-    messages.value[messages.value.length - 1].content =
-      error.response?.data?.message || error.message || '问答服务暂时不可用，请稍后重试';
+    if (error.name === 'AbortError') {
+      assistantMessage.content = assistantMessage.content
+        ? `${assistantMessage.content}\n\n_已停止生成。_`
+        : '已停止生成。';
+    } else {
+      assistantMessage.content = assistantMessage.content ||
+        error.message || '问答服务暂时不可用，请稍后重试';
+    }
   } finally {
-    isLoading.value = false;
+    if (streamController.value === controller) {
+      streamController.value = null;
+      isLoading.value = false;
+    }
     await nextTick();
     scrollToBottom();
   }
+};
+
+const stopGeneration = () => {
+  streamController.value?.abort();
 };
 
 const startNewConversation = () => {

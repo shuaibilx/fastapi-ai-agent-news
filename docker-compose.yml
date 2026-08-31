@@ -5,6 +5,8 @@ services:
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
+      # The FastAPI process runs on the host, outside Docker's MySQL container.
+      MYSQL_ROOT_HOST: "%"
       MYSQL_DATABASE: ${MYSQL_DATABASE:-news_app}
     ports:
       - "${MYSQL_PORT:-3306}:3306"

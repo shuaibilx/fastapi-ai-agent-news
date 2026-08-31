@@ -1,11 +1,13 @@
 """Application orchestration for the authenticated news agent."""
 
+import asyncio
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
 from langchain.agents.middleware.pii import PIIDetectionError
-from langchain.messages import AIMessage, HumanMessage
+from langchain.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langgraph.errors import GraphRecursionError
 
 from app.ai.agent.memory import normalize_conversation_id
@@ -14,6 +16,7 @@ from app.ai.agent.memory_store import MemoryStatus
 from app.ai.agent.results import AgentCitation, AgentToolSummary, collect_tool_metadata
 from app.ai.agent.safety import SensitiveDataBlocked, sanitize_text
 from app.ai.agent.tools import AgentReadPort, AgentRuntimeContext
+from app.ai.streaming import StreamEvent
 
 
 _MIN_GRAPH_RECURSION_LIMIT = 100
@@ -37,6 +40,14 @@ class AgentRunner(Protocol):
         context: AgentRuntimeContext,
         config: dict[str, Any],
     ) -> dict[str, Any]: ...
+
+    def astream_events(
+        self,
+        payload: dict[str, Any],
+        *,
+        context: AgentRuntimeContext,
+        config: dict[str, Any],
+    ) -> AsyncIterator[dict[str, Any]]: ...
 
 
 @dataclass(frozen=True)
@@ -74,8 +85,7 @@ class AgentService:
         conversation_id: str | None,
         reader: AgentReadPort,
     ) -> AgentResult:
-        normalized_message = message.strip()
-        conversation_id = normalize_conversation_id(conversation_id)
+        normalized_message, conversation_id = self.validate_input(message, conversation_id)
 
         return await self._ask_with_checkpointer(
             user_id=user_id,
@@ -83,6 +93,123 @@ class AgentService:
             conversation_id=conversation_id,
             reader=reader,
         )
+
+    def validate_input(self, message: str, conversation_id: str | None) -> tuple[str, str]:
+        normalized_message = message.strip()
+        if not normalized_message:
+            raise ValueError("消息不能为空")
+        return sanitize_text(normalized_message), normalize_conversation_id(conversation_id)
+
+    async def stream(
+        self,
+        *,
+        user_id: int,
+        message: str,
+        conversation_id: str | None,
+        reader: AgentReadPort,
+    ) -> AsyncIterator[StreamEvent]:
+        safe_message, normalized_conversation_id = self.validate_input(message, conversation_id)
+        session = await self._memory_runtime.prepare(user_id, normalized_conversation_id)
+        runtime_context = AgentRuntimeContext(
+            user_id=user_id,
+            reader=reader,
+            retrieval_limit=self._retrieval_limit,
+            page_size_limit=self._page_size_limit,
+            tool_result_max_tokens=self._tool_result_max_tokens,
+        )
+        recursion_limit = max(
+            _MIN_GRAPH_RECURSION_LIMIT,
+            self._max_iterations * _GRAPH_STEPS_PER_MODEL_CALL + _GRAPH_STEP_OVERHEAD,
+        )
+        config = {"recursion_limit": recursion_limit, **session.config}
+        yield StreamEvent.meta({
+            "mode": "agent",
+            "conversationId": normalized_conversation_id,
+            "memoryStatus": session.status.value,
+        })
+
+        output_messages: list[Any] = []
+        emitted_text = False
+        try:
+            async for event in self._runner.astream_events(
+                {"messages": [HumanMessage(content=safe_message)]},
+                context=runtime_context,
+                config=config,
+            ):
+                event_type = event.get("event")
+                data = event.get("data") or {}
+                if event_type == "on_tool_end":
+                    output = data.get("output")
+                    if isinstance(output, ToolMessage):
+                        _, summaries = collect_tool_metadata([output])
+                        for summary in summaries:
+                            yield StreamEvent.tool({
+                                "name": summary.name,
+                                "status": summary.status,
+                                "summary": summary.summary,
+                            })
+                    continue
+                if event_type == "on_chat_model_stream":
+                    chunk = data.get("chunk")
+                    token = self._safe_visible_token(chunk)
+                    if token is not None:
+                        emitted_text = True
+                        yield StreamEvent.delta(token)
+                    continue
+                if event_type == "on_chain_end" and event.get("name") == "news_agent":
+                    output = data.get("output")
+                    if isinstance(output, dict):
+                        messages = output.get("messages")
+                        if isinstance(messages, list):
+                            output_messages = messages
+        except asyncio.CancelledError:
+            raise
+        except (SensitiveDataBlocked, PIIDetectionError) as exc:
+            if isinstance(exc, PIIDetectionError):
+                raise SensitiveDataBlocked(exc.pii_type) from exc
+            raise
+        except (GraphRecursionError, ModelCallLimitExceededError) as exc:
+            raise AgentExecutionLimitExceeded("Agent 超出允许的执行轮次") from exc
+        except Exception as exc:
+            raise AgentProviderUnavailable("Agent 服务暂时不可用") from exc
+
+        final_message = next(
+            (
+                item for item in reversed(output_messages)
+                if isinstance(item, AIMessage) and isinstance(item.content, str) and item.content.strip()
+            ),
+            None,
+        )
+        if final_message is None or not emitted_text:
+            raise AgentProviderUnavailable("模型未返回可用回答")
+        citations, tool_calls = collect_tool_metadata(output_messages)
+        memory_status = session.status
+        if memory_status is not MemoryStatus.UNAVAILABLE:
+            memory_status = await self._memory_runtime.verify_saved(session)
+        yield StreamEvent.done({
+            "conversationId": normalized_conversation_id,
+            "citations": [
+                {"newsId": citation.news_id, "title": citation.title, "excerpt": citation.excerpt}
+                for citation in citations
+            ],
+            "toolCalls": [
+                {"name": summary.name, "status": summary.status, "summary": summary.summary}
+                for summary in tool_calls
+            ],
+            "memoryStatus": memory_status.value,
+        })
+
+    @staticmethod
+    def _safe_visible_token(chunk: Any) -> str | None:
+        if not isinstance(chunk, (AIMessage, AIMessageChunk)):
+            return None
+        content = chunk.content
+        additional_kwargs = getattr(chunk, "additional_kwargs", {}) or {}
+        if not isinstance(content, str) or not content:
+            return None
+        if additional_kwargs.get("reasoning_content") or getattr(chunk, "tool_calls", None):
+            return None
+        return sanitize_text(content)
 
     async def _ask_with_checkpointer(
         self,

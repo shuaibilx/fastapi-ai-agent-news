@@ -7,7 +7,9 @@ from starlette import status
 
 # 开发模式：返回详细错误信息
 # 生产模式：返回简化错误信息
-DEBUG_MODE = True  # 教学项目保持开启
+# Never send tracebacks, passwords, SQL statements, or connection strings to browsers.
+# Server-side logs remain the source of diagnostic detail.
+DEBUG_MODE = False
 
 
 # 1.业务层异常处理

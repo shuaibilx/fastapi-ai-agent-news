@@ -20,9 +20,11 @@ Edit `.env`:
 
 ```env
 MYSQL_PASSWORD=your_mysql_password
+MYSQL_DATABASE=news_app
 ```
 
 The application reads MySQL, Redis, and AI settings from `app/core/config.py`. Do not commit `.env`.
+`MYSQL_DATABASE` must match the database created by Docker and the SQL import. The supplied schema creates `news_app`; do not point the application at a separate test database unless that database has also been initialized with the schema.
 
 ### AI news summary
 
@@ -60,7 +62,56 @@ Content-Type: application/json
 
 The response `data` contains `answer` and `citations`. Each citation includes `newsId`, `title`, and `excerpt` from an article used to ground the answer. The backend searches Redis Stack vectors first, then falls back to a MySQL keyword search only when the local Embedding service or vector index is unavailable. A healthy semantic search with no match returns no citation rather than mixing in unrelated keyword results.
 
-All model provider credentials stay server-side. The browser only sends the application bearer token and the question; it never stores or sends an LLM API key. The frontend AI chat page now calls `/api/ai/qa` rather than a provider endpoint directly.
+All model provider credentials stay server-side. The browser only sends the application bearer token and the question; it never stores or sends an LLM API key. The frontend AI chat page calls the backend Agent endpoint rather than a provider endpoint directly.
+
+### Streaming AI responses (SSE)
+
+The backend also provides authenticated POST Server-Sent Event endpoints for progressive AI output:
+
+| Endpoint | Request body | Use case |
+| --- | --- | --- |
+| `POST /api/ai/qa/stream` | `{ "question": "..." }` | Grounded news QA for a future QA page or another client |
+| `POST /api/ai/agent/stream` | `{ "message": "...", "conversationId": "optional UUID" }` | The existing AI chat page |
+
+Both endpoints require the application bearer token and return `Content-Type: text/event-stream`. They emit JSON payloads in these SSE event types:
+
+| Event | Meaning |
+| --- | --- |
+| `meta` | Request metadata, including Agent conversation and initial memory state when applicable |
+| `delta` | A user-visible answer text increment |
+| `citation` | A grounded news citation (`newsId`, title, excerpt) |
+| `tool` | Agent-only safe tool status (name, status, summary) |
+| `done` | Exactly one successful completion event with final citations, tool summaries, conversation and memory metadata |
+| `error` | A safe error after the stream has started; it is never followed by `done` |
+| `ping` | Connection keepalive with no answer content |
+
+Use browser `fetch`, not native `EventSource`, because the existing authentication model sends an `Authorization` header with a POST request. The client implementation is in [`front-end/src/api/ai.js`](front-end/src/api/ai.js); it incrementally decodes UTF-8 and supports `AbortController`:
+
+```js
+const controller = new AbortController()
+await streamNewsAgent('我最近看了什么新闻？', conversationId, token, {
+  signal: controller.signal,
+  onEvent: ({ event, data }) => {
+    if (event === 'delta') answer += data.text
+    if (event === 'done') conversationId = data.conversationId
+  },
+})
+// controller.abort() stops generation. A cancelled request is not a successful answer.
+```
+
+For a manual local verification, log in through the frontend, open **AI新闻助手**, submit a question and confirm text appears progressively. Ask a tool-oriented question such as “我最近都看了什么新闻” to observe a safe tool status. Click **停止生成** before completion and confirm that the partial response is marked stopped rather than completed. Then verify a missing token returns HTTP 401, and temporarily configure an unavailable LLM endpoint to verify an SSE `error` without `done`.
+
+If the API runs behind Nginx or another reverse proxy, disable response buffering for these paths; otherwise token events can be held until the request completes. The backend sends `X-Accel-Buffering: no`, but the proxy still needs an equivalent setting, for example:
+
+```nginx
+location /api/ai/ {
+    proxy_pass http://127.0.0.1:8000;
+    proxy_buffering off;
+    proxy_cache off;
+}
+```
+
+SSE intentionally does not implement automatic reconnects, event IDs, replay, or rollback of already-persisted Agent checkpoint state. It never emits model reasoning, tool arguments, raw tool output, credentials, or connection strings.
 
 ## Start MySQL, Redis Stack, and Embedding
 
@@ -116,7 +167,7 @@ docker cp database/database.sql toutiao-mysql:/tmp/database.sql
 docker exec -i toutiao-mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" < /tmp/database.sql'
 ```
 
-The SQL file includes initial categories, news, and a test user. Run the import once for a fresh database. Re-running it may attempt to insert the seed data again.
+The SQL file includes initial categories, news, and a test user. Run the import once for a fresh database. Re-running it may attempt to insert the seed data again. MySQL users and passwords are initialized only when the `mysql_data` Docker volume is first created. If a new password or `MYSQL_ROOT_HOST` is configured after that first startup, preserve the data and alter the account manually, or—only for disposable local data—recreate the stack with `docker compose down -v` followed by `docker compose up -d`.
 
 ## Start the API
 
