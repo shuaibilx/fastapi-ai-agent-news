@@ -7,6 +7,8 @@ from typing import Any, Protocol, runtime_checkable
 from langchain.messages import ToolMessage
 from langchain.tools import ToolRuntime, tool
 
+from app.ai.rag.context import RetrievalContextBuilder
+
 
 @runtime_checkable
 class AgentReadPort(Protocol):
@@ -27,6 +29,7 @@ class AgentRuntimeContext:
     retrieval_limit: int
     page_size_limit: int
     tool_result_max_tokens: int
+    rag_context_builder: RetrievalContextBuilder | None = None
 
 
 def _display_time(value: Any) -> str | None:
@@ -103,16 +106,25 @@ async def search_news_knowledge(
 
     lines = []
     citations = []
-    for article in articles:
+    context_result = (
+        runtime.context.rag_context_builder.build(articles)
+        if runtime.context.rag_context_builder is not None
+        else None
+    )
+    visible_articles = list(context_result.articles) if context_result else articles
+    for article in visible_articles:
         excerpt = getattr(article, "excerpt", None) or getattr(article, "description", None)
-        lines.append(f"[{article.id}] {article.title}\n{excerpt or ''}")
+        passages = getattr(article, "passages", ())
+        passage_text = "\n".join(passage.text for passage in passages)
+        lines.append(f"[{article.id}] {article.title}\n{passage_text or excerpt or ''}")
         citations.append(_citation(article, excerpt))
+    content = context_result.context if context_result else "\n\n".join(lines)
     return _message(
         runtime,
         name="search_news_knowledge",
-        content="\n\n".join(lines),
+        content=content,
         citations=citations,
-        summary=f"检索到 {len(articles)} 篇相关新闻",
+        summary=f"检索到 {len(visible_articles)} 篇相关新闻",
     )
 
 

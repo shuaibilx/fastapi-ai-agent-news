@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
+from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -25,6 +26,8 @@ from app.ai.rag import (
     RedisSemanticNewsSearch,
 )
 from app.ai.rag.vector_store import RedisNewsVectorStore
+from app.ai.rag.chunking import BgeTokenCounter
+from app.ai.rag.context import RetrievalContextBuilder
 from app.ai.summarization import (
     LangChainSummaryGateway,
     NewsSummaryService,
@@ -52,6 +55,19 @@ from app.services import news
 
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
+
+
+@lru_cache(maxsize=4)
+def get_bge_token_counter(tokenizer_path: str) -> BgeTokenCounter:
+    return BgeTokenCounter(tokenizer_path)
+
+
+def build_rag_context_builder() -> RetrievalContextBuilder:
+    settings = get_settings()
+    return RetrievalContextBuilder(
+        token_counter=get_bge_token_counter(settings.embedding_tokenizer_path),
+        max_tokens=settings.ai_qa_max_context_tokens,
+    )
 
 
 def sse_response(
@@ -158,11 +174,14 @@ def build_news_retrieval(db: AsyncSession) -> NewsRetrievalService:
             ),
             vector_store=RedisNewsVectorStore(
                 redis_client=redis_client,
-                index_name=settings.ai_semantic_index_name,
-                key_prefix=settings.ai_semantic_key_prefix,
+                index_alias=settings.ai_semantic_index_alias,
+                index_prefix=settings.ai_semantic_index_prefix,
+                key_prefix=settings.ai_semantic_chunk_key_prefix,
                 vector_dimensions=settings.ai_semantic_vector_dimensions,
             ),
             minimum_score=settings.ai_semantic_score_threshold,
+            candidate_chunk_limit=settings.ai_semantic_candidate_chunk_limit,
+            max_chunks_per_news=settings.ai_semantic_max_chunks_per_news,
         ),
     )
 
@@ -177,6 +196,7 @@ def get_qa_service(db: AsyncSession = Depends(get_db)) -> QaService:
             model=settings.llm_model,
             timeout_seconds=settings.llm_timeout_seconds,
         ),
+        context_builder=build_rag_context_builder(),
     )
 
 
@@ -205,6 +225,7 @@ def get_agent_service(request: Request) -> AgentService:
         retrieval_limit=settings.ai_qa_retrieval_limit,
         page_size_limit=10,
         tool_result_max_tokens=settings.ai_agent_tool_result_max_tokens,
+        rag_context_builder=build_rag_context_builder(),
     )
 
 

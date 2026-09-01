@@ -1,10 +1,4 @@
-# news-semantic-retrieval Specification
-
-## Purpose
-
-为项目内新闻提供可重复构建、可持久化的中文语义检索能力，在本地服务不可用时保持检索服务可降级且不影响现有新闻问答与 Agent 的可用性。
-
-## Requirements
+## ADDED Requirements
 
 ### Requirement: 受约束的中文新闻分块
 
@@ -43,6 +37,8 @@
 
 - **WHEN** QA 或 Agent 使用语义检索结果生成回答
 - **THEN** 客户端收到现有格式的新闻 ID、标题和实际命中片段，且顶层 HTTP 响应结构保持兼容
+
+## MODIFIED Requirements
 
 ### Requirement: 本地新闻向量索引
 

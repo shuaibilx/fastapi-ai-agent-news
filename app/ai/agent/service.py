@@ -16,6 +16,7 @@ from app.ai.agent.memory_store import MemoryStatus
 from app.ai.agent.results import AgentCitation, AgentToolSummary, collect_tool_metadata
 from app.ai.agent.safety import SensitiveDataBlocked, sanitize_text
 from app.ai.agent.tools import AgentReadPort, AgentRuntimeContext
+from app.ai.rag.context import RetrievalContextBuilder
 from app.ai.streaming import StreamEvent
 
 
@@ -69,6 +70,7 @@ class AgentService:
         retrieval_limit: int,
         page_size_limit: int,
         tool_result_max_tokens: int,
+        rag_context_builder: RetrievalContextBuilder | None = None,
     ):
         self._runner = runner
         self._memory_runtime = memory_runtime
@@ -76,6 +78,7 @@ class AgentService:
         self._retrieval_limit = retrieval_limit
         self._page_size_limit = page_size_limit
         self._tool_result_max_tokens = tool_result_max_tokens
+        self._rag_context_builder = rag_context_builder
 
     async def ask(
         self,
@@ -116,6 +119,7 @@ class AgentService:
             retrieval_limit=self._retrieval_limit,
             page_size_limit=self._page_size_limit,
             tool_result_max_tokens=self._tool_result_max_tokens,
+            rag_context_builder=self._rag_context_builder,
         )
         recursion_limit = max(
             _MIN_GRAPH_RECURSION_LIMIT,
@@ -227,6 +231,7 @@ class AgentService:
             retrieval_limit=self._retrieval_limit,
             page_size_limit=self._page_size_limit,
             tool_result_max_tokens=self._tool_result_max_tokens,
+            rag_context_builder=self._rag_context_builder,
         )
         # LangGraph counts middleware and tool nodes as graph steps. ModelCallLimitMiddleware
         # remains the hard bound for model invocations; this limit only leaves room for orchestration.

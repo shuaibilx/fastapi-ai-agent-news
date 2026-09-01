@@ -60,7 +60,7 @@ Content-Type: application/json
 { "question": "有哪些关于 AI 的新闻？" }
 ```
 
-The response `data` contains `answer` and `citations`. Each citation includes `newsId`, `title`, and `excerpt` from an article used to ground the answer. The backend searches Redis Stack vectors first, then falls back to a MySQL keyword search only when the local Embedding service or vector index is unavailable. A healthy semantic search with no match returns no citation rather than mixing in unrelated keyword results.
+The response `data` contains `answer` and `citations`. Each citation includes `newsId`, `title`, and an `excerpt` taken from the actual matching Chunk. Long Chinese news is split at paragraph, sentence, and clause boundaries with the local BGE tokenizer (320-token target, 48-token overlap, 480-token hard Embedding input limit). Redis Stack returns up to 20 Chunk candidates with cosine similarity of at least 0.45; the backend groups them into at most five news articles and keeps at most two passages per article. QA and Agent share a 2400-token, overlap-aware context builder. The backend falls back to a MySQL keyword search only when the local Embedding service or vector index is unavailable.
 
 All model provider credentials stay server-side. The browser only sends the application bearer token and the question; it never stores or sends an LLM API key. The frontend AI chat page calls the backend Agent endpoint rather than a provider endpoint directly.
 
@@ -145,7 +145,35 @@ After MySQL, Redis Stack, and TEI are healthy, build the vectors explicitly:
 uv run python -m app.ai.rag.reindex
 ```
 
-The command reads every current `news` row in configured batches and replaces only the `ai:news:vector:v1:` keys. It is safe to repeat after importing, editing, or deleting news: cache keys and Agent checkpoint keys are not cleared. With the default CPU configuration, the initial build can take a few minutes.
+The command reads every current `news` row, creates token-bounded Chunks, embeds them in batches, and writes an isolated v2 build. It validates the build before atomically moving `idx:ai:news:chunk:active`; a failed build leaves the previous Alias target available. The CLI reports the `build_id`, concrete index, scanned news, generated Chunks, and written Chunks. News caches, summaries, Agent checkpoints, the previous v2 build, and the v1 index are not cleared.
+
+Inspect and monitor the active build:
+
+```powershell
+docker exec toutiao-redis redis-cli FT.INFO idx:ai:news:chunk:active
+docker exec toutiao-redis redis-cli FT._LIST
+docker exec toutiao-redis redis-cli --scan --pattern 'ai:news:chunk:v2:*' | Measure-Object
+```
+
+If a newly activated build is unhealthy, point the Alias at the exact previous compatible v2 index printed by an earlier successful build:
+
+```powershell
+docker exec toutiao-redis redis-cli FT.ALIASUPDATE idx:ai:news:chunk:active idx:ai:news:chunk:v2:<previous-build-id>
+```
+
+After the rollback window, remove only an explicitly verified inactive build. `DD` deletes documents belonging to that exact concrete index; never use a broad `ai:*` key pattern:
+
+```powershell
+docker exec toutiao-redis redis-cli FT.DROPINDEX idx:ai:news:chunk:v2:<inactive-build-id> DD
+```
+
+Run the labeled retrieval parameter grid against the local TEI service:
+
+```powershell
+uv run python -m app.ai.rag.evaluate --output openspec/changes/improve-news-vector-chunking/evaluation-results.json
+```
+
+The fixture covers a fact after token 512, a boundary fact, multiple passages from one article, similar articles, and an unrelated question. The report includes `Recall@20`, `MRR`, `HitRate@5`, context precision, and citation correctness for each Chunk-size/overlap/threshold combination.
 
 The default TEI image is pinned to `cpu-1.9`, with batches capped at four documents. If TEI is unhealthy, first confirm the model directory and `docker compose logs embedding`; the backend will continue to answer through keyword retrieval until the semantic dependency is restored. To roll back semantic retrieval temporarily, stop the `embedding` service or point `EMBEDDING_BASE_URL` at an unavailable endpoint; no API contract changes are needed because the keyword fallback remains active.
 

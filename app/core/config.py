@@ -39,15 +39,25 @@ class Settings(BaseSettings):
     ai_summary_cache_ttl_seconds: int = Field(default=60 * 60 * 24 * 30, ge=60)
     ai_qa_retrieval_limit: int = Field(default=5, ge=1, le=20)
     ai_qa_max_context_chars: int = Field(default=6000, ge=200, le=20000)
+    ai_qa_max_context_tokens: int = Field(default=2400, ge=100, le=20000)
     embedding_base_url: str = "http://127.0.0.1:8081"
     embedding_model: str = "bge-large-zh-v1.5"
+    embedding_tokenizer_path: str = "app/embedding/bge-large-zh-v1.5/tokenizer.json"
     embedding_timeout_seconds: int = Field(default=30, ge=1, le=120)
     ai_semantic_index_name: str = "idx:ai:news:vector:v1"
     ai_semantic_key_prefix: str = "ai:news:vector:v1:"
+    ai_semantic_index_alias: str = "idx:ai:news:chunk:active"
+    ai_semantic_index_prefix: str = "idx:ai:news:chunk:v2"
+    ai_semantic_chunk_key_prefix: str = "ai:news:chunk:v2"
     ai_semantic_vector_dimensions: int = Field(default=1024, ge=1)
     ai_semantic_batch_size: int = Field(default=4, ge=1, le=256)
     ai_semantic_retrieval_limit: int = Field(default=5, ge=1, le=20)
-    ai_semantic_score_threshold: float = Field(default=0.35, ge=0, le=1)
+    ai_semantic_candidate_chunk_limit: int = Field(default=20, ge=1, le=100)
+    ai_semantic_max_chunks_per_news: int = Field(default=2, ge=1, le=10)
+    ai_semantic_chunk_size_tokens: int = Field(default=320, ge=32, le=511)
+    ai_semantic_chunk_overlap_tokens: int = Field(default=48, ge=0, le=510)
+    ai_semantic_embedding_input_max_tokens: int = Field(default=480, ge=64, le=512)
+    ai_semantic_score_threshold: float = Field(default=0.45, ge=0, le=1)
     ai_agent_history_max_rounds: int = Field(default=5, ge=1, le=20)
     ai_agent_history_max_tokens: int = Field(default=3000, ge=100, le=100000)
     ai_agent_tool_result_max_tokens: int = Field(default=4000, ge=100, le=100000)
@@ -64,6 +74,14 @@ class Settings(BaseSettings):
             raise ValueError("ai_agent_summary_keep_tokens 必须小于 ai_agent_summary_trigger_tokens")
         if self.ai_agent_summary_trigger_tokens >= self.ai_agent_input_max_tokens:
             raise ValueError("ai_agent_summary_trigger_tokens 必须小于 ai_agent_input_max_tokens")
+        if self.ai_semantic_chunk_overlap_tokens >= self.ai_semantic_chunk_size_tokens:
+            raise ValueError("ai_semantic_chunk_overlap_tokens 必须小于 ai_semantic_chunk_size_tokens")
+        if self.ai_semantic_chunk_size_tokens >= self.ai_semantic_embedding_input_max_tokens:
+            raise ValueError("ai_semantic_chunk_size_tokens 必须小于 ai_semantic_embedding_input_max_tokens")
+        if self.ai_semantic_candidate_chunk_limit < self.ai_qa_retrieval_limit:
+            raise ValueError("ai_semantic_candidate_chunk_limit 不得小于 ai_qa_retrieval_limit")
+        if self.ai_semantic_max_chunks_per_news > self.ai_semantic_candidate_chunk_limit:
+            raise ValueError("ai_semantic_max_chunks_per_news 不得超过候选 Chunk 数")
         return self
 
     @computed_field

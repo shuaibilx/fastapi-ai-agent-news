@@ -7,6 +7,7 @@ from app.ai.embeddings import EmbeddingProviderUnavailable
 from app.ai.rag.vector_store import (
     NewsVectorStoreUnavailable,
     RedisNewsVectorStore,
+    VectorSearchHit,
 )
 
 
@@ -19,6 +20,16 @@ class NewsRecord(Protocol):
 
 
 @dataclass(frozen=True)
+class RetrievedPassage:
+    chunk_id: str
+    chunk_index: int
+    start_index: int
+    end_index: int
+    text: str
+    score: float
+
+
+@dataclass(frozen=True)
 class RetrievedArticle:
     id: int
     title: str
@@ -27,6 +38,7 @@ class RetrievedArticle:
     views: int
     excerpt: str | None
     match_count: int
+    passages: tuple[RetrievedPassage, ...] = ()
 
 
 class SemanticSearchUnavailable(RuntimeError):
@@ -52,10 +64,14 @@ class RedisSemanticNewsSearch:
         embedding_service: EmbeddingSearchPort,
         vector_store: RedisNewsVectorStore,
         minimum_score: float,
+        candidate_chunk_limit: int = 20,
+        max_chunks_per_news: int = 2,
     ):
         self._embedding_service = embedding_service
         self._vector_store = vector_store
         self._minimum_score = minimum_score
+        self._candidate_chunk_limit = candidate_chunk_limit
+        self._max_chunks_per_news = max_chunks_per_news
 
     async def search(self, question: str, limit: int) -> list[RetrievedArticle]:
         clean_question = question.strip()
@@ -69,26 +85,69 @@ class RedisSemanticNewsSearch:
                 raise SemanticSearchUnavailable("Embedding 结果无效")
             hits = await self._vector_store.search(
                 vectors[0],
-                limit=limit,
+                limit=self._candidate_chunk_limit,
                 minimum_score=self._minimum_score,
             )
         except (EmbeddingProviderUnavailable, NewsVectorStoreUnavailable) as exc:
             raise SemanticSearchUnavailable("语义检索暂时不可用") from exc
 
-        articles: list[RetrievedArticle] = []
-        for hit in hits:
-            source = hit.content or hit.description or hit.title
-            excerpt = source[:80] + ("…" if len(source) > 80 else "")
-            articles.append(RetrievedArticle(
-                id=hit.news_id,
-                title=hit.title,
-                description=hit.description,
-                content=hit.content,
-                views=hit.views,
-                excerpt=excerpt,
-                match_count=0,
-            ))
-        return articles
+        return aggregate_chunk_hits(
+            hits,
+            limit=limit,
+            max_chunks_per_news=self._max_chunks_per_news,
+        )
+
+
+def aggregate_chunk_hits(
+    hits: list[VectorSearchHit],
+    *,
+    limit: int,
+    max_chunks_per_news: int,
+) -> list[RetrievedArticle]:
+    grouped: dict[int, list[VectorSearchHit]] = {}
+    for hit in hits:
+        grouped.setdefault(hit.news_id, []).append(hit)
+
+    ranked_groups = sorted(
+        grouped.values(),
+        key=lambda group: (-max(hit.score for hit in group), group[0].news_id),
+    )
+    articles: list[RetrievedArticle] = []
+    for group in ranked_groups[:limit]:
+        best_hits = sorted(
+            group,
+            key=lambda hit: (-hit.score, hit.chunk_index, hit.chunk_id),
+        )[:max_chunks_per_news]
+        highest = best_hits[0]
+        ordered_hits = sorted(
+            best_hits,
+            key=lambda hit: (hit.chunk_index, hit.start_index, hit.chunk_id),
+        )
+        excerpt = highest.chunk_text[:240]
+        if len(highest.chunk_text) > 240:
+            excerpt += "…"
+        passages = tuple(
+            RetrievedPassage(
+                chunk_id=hit.chunk_id,
+                chunk_index=hit.chunk_index,
+                start_index=hit.start_index,
+                end_index=hit.end_index,
+                text=hit.chunk_text,
+                score=hit.score,
+            )
+            for hit in ordered_hits
+        )
+        articles.append(RetrievedArticle(
+            id=highest.news_id,
+            title=highest.title,
+            description=highest.description,
+            content="\n".join(passage.text for passage in passages),
+            views=highest.views,
+            excerpt=excerpt,
+            match_count=0,
+            passages=passages,
+        ))
+    return articles
 
 
 class NewsSearchPort(Protocol):
@@ -164,6 +223,14 @@ class NewsRetrievalService:
                     views=record.views,
                     excerpt=excerpt,
                     match_count=match_count,
+                    passages=(RetrievedPassage(
+                        chunk_id=f"keyword:{record.id}",
+                        chunk_index=0,
+                        start_index=0,
+                        end_index=len(excerpt or ""),
+                        text=excerpt or "",
+                        score=0.0,
+                    ),) if excerpt else (),
                 ))
         ranked.sort(key=lambda item: (item.match_count, item.views), reverse=True)
         return ranked[:limit]

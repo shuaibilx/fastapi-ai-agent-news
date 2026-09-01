@@ -74,6 +74,45 @@ class NewsRetrievalServiceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class QaServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_qa_uses_full_retrieved_passage_instead_of_display_excerpt(self):
+        from app.ai.rag.context import RetrievalContextBuilder
+        from app.ai.rag.retrieval import RetrievedArticle, RetrievedPassage
+
+        class Retrieval:
+            async def search(self, question):
+                return [RetrievedArticle(
+                    id=7,
+                    title="后部事实",
+                    description=None,
+                    content=None,
+                    views=1,
+                    excerpt="客户端短摘录",
+                    match_count=0,
+                    passages=(RetrievedPassage(
+                        "7:4:hash", 4, 400, 420, "模型必须看到的完整命中片段", 0.91,
+                    ),),
+                )]
+
+        class Counter:
+            def count(self, text):
+                return len(text)
+
+        gateway = FakeQaGateway("回答")
+        service = QaService(
+            retrieval=Retrieval(),
+            gateway=gateway,
+            context_builder=RetrievalContextBuilder(
+                token_counter=Counter(),
+                max_tokens=200,
+            ),
+        )
+
+        result = await service.ask("后部有什么事实？")
+
+        self.assertIn("模型必须看到的完整命中片段", gateway.calls[0][1])
+        self.assertNotIn("客户端短摘录", gateway.calls[0][1])
+        self.assertEqual(result.citations[0].excerpt, "客户端短摘录")
+
     async def test_answer_generation_returns_answer_and_citations(self):
         service = QaService(
             retrieval=NewsRetrievalService(

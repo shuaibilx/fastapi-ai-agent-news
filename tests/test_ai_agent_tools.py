@@ -95,6 +95,26 @@ def test_news_search_uses_shared_reader_and_caps_requested_limit():
     ]
 
 
+def test_news_search_sends_full_chunk_passages_to_agent_but_keeps_short_citation():
+    from app.ai.rag.retrieval import RetrievedPassage
+
+    reader = FakeReader()
+    row = article()
+    row.passages = (
+        RetrievedPassage("11:3:hash", 3, 300, 330, "后部命中的完整 Chunk 内容", 0.92),
+    )
+    reader.search_result = [row]
+
+    result = invoke(
+        search_news_knowledge,
+        query="后部事实",
+        runtime=runtime(reader),
+    )
+
+    assert "后部命中的完整 Chunk 内容" in result.content
+    assert result.artifact["citations"][0]["excerpt"] == "相关摘录"
+
+
 def test_news_detail_returns_serializable_content_without_orm_internal_state():
     reader = FakeReader()
     reader.detail_result = article(content="完整正文")

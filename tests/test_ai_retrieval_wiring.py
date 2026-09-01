@@ -14,9 +14,16 @@ class SemanticVectorStoreStub:
     async def search(self, embedding, *, limit, minimum_score):
         return [VectorSearchHit(
             news_id=31,
+            chunk_id="31:2:hash",
+            chunk_index=2,
+            start_index=200,
+            end_index=215,
             title="国产算力进展",
             description="芯片产业",
-            content="本土 AI 加速器发布",
+            chunk_text="本土 AI 加速器发布",
+            content_hash="hash",
+            category_id=1,
+            publish_time="2026-09-01T08:00:00",
             views=88,
             score=0.91,
         )]
@@ -31,9 +38,12 @@ class NewsRetrievalWiringTests(unittest.IsolatedAsyncioTestCase):
             embedding_base_url="http://embedding:8081",
             embedding_timeout_seconds=20,
             ai_semantic_vector_dimensions=2,
-            ai_semantic_index_name="idx:ai:news:vector:v1",
-            ai_semantic_key_prefix="ai:news:vector:v1:",
+            ai_semantic_index_alias="idx:ai:news:chunk:active",
+            ai_semantic_index_prefix="idx:ai:news:chunk:v2",
+            ai_semantic_chunk_key_prefix="ai:news:chunk:v2",
             ai_semantic_score_threshold=0.35,
+            ai_semantic_candidate_chunk_limit=20,
+            ai_semantic_max_chunks_per_news=2,
         )
         with (
             patch("app.api.routers.ai.get_settings", return_value=settings),

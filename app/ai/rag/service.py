@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from collections.abc import AsyncIterator
 
 from app.ai.rag.gateway import QaGateway, QaProviderUnavailable
+from app.ai.rag.context import RetrievalContextBuilder
 from app.ai.rag.retrieval import NewsRetrievalService
 from app.ai.streaming import StreamEvent
 
@@ -24,9 +25,19 @@ class NewsQaResult:
 class QaService:
     """Retrieve first, then answer only from the retrieved news context."""
 
-    def __init__(self, *, retrieval: NewsRetrievalService, gateway: QaGateway):
+    def __init__(
+        self,
+        *,
+        retrieval: NewsRetrievalService,
+        gateway: QaGateway,
+        context_builder: RetrievalContextBuilder | None = None,
+    ):
         self._retrieval = retrieval
         self._gateway = gateway
+        self._context_builder = context_builder or RetrievalContextBuilder(
+            token_counter=_CharacterTokenCounter(),
+            max_tokens=6000,
+        )
 
     async def ask(self, question: str) -> NewsQaResult:
         if not question or not question.strip():
@@ -39,15 +50,17 @@ class QaService:
                 citations=[],
             )
 
+        context_result = self._context_builder.build(articles)
+        if not context_result.articles:
+            return NewsQaResult(
+                answer="无法回答：相关新闻片段超出了上下文限制。",
+                citations=[],
+            )
         citations = [
             QaCitation(news_id=article.id, title=article.title, excerpt=article.excerpt)
-            for article in articles
+            for article in context_result.articles
         ]
-        context = "\n\n".join(
-            f"[{article.id}] {article.title}\n{article.excerpt or ''}"
-            for article in articles
-        )
-        answer = await self._gateway.answer(question, context)
+        answer = await self._gateway.answer(question, context_result.context)
         return NewsQaResult(answer=answer, citations=citations)
 
     async def stream(self, question: str) -> AsyncIterator[StreamEvent]:
@@ -61,9 +74,14 @@ class QaService:
             yield StreamEvent.done({"citations": []})
             return
 
+        context_result = self._context_builder.build(articles)
+        if not context_result.articles:
+            yield StreamEvent.delta("无法回答：相关新闻片段超出了上下文限制。")
+            yield StreamEvent.done({"citations": []})
+            return
         citations = [
             QaCitation(news_id=article.id, title=article.title, excerpt=article.excerpt)
-            for article in articles
+            for article in context_result.articles
         ]
         public_citations = [
             {"newsId": citation.news_id, "title": citation.title, "excerpt": citation.excerpt}
@@ -71,15 +89,16 @@ class QaService:
         ]
         for citation in public_citations:
             yield StreamEvent.citation(citation)
-        context = "\n\n".join(
-            f"[{article.id}] {article.title}\n{article.excerpt or ''}"
-            for article in articles
-        )
         emitted = False
-        async for token in self._gateway.stream_answer(question, context):
+        async for token in self._gateway.stream_answer(question, context_result.context):
             if token:
                 emitted = True
                 yield StreamEvent.delta(token)
         if not emitted:
             raise QaProviderUnavailable("模型返回了空回答")
         yield StreamEvent.done({"citations": public_citations})
+
+
+class _CharacterTokenCounter:
+    def count(self, text: str) -> int:
+        return len(text)

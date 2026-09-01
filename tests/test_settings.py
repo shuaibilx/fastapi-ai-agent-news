@@ -132,6 +132,76 @@ class SettingsTest(unittest.TestCase):
 
         self.assertEqual(settings.ai_semantic_batch_size, 4)
 
+    def test_exposes_bounded_chunk_retrieval_defaults(self):
+        """Removing any v2 budget must break the retrieval configuration contract."""
+        from app.core.config import Settings
+
+        settings = Settings()
+
+        self.assertEqual(settings.ai_semantic_chunk_size_tokens, 320)
+        self.assertEqual(settings.ai_semantic_chunk_overlap_tokens, 48)
+        self.assertEqual(settings.ai_semantic_embedding_input_max_tokens, 480)
+        self.assertEqual(settings.ai_semantic_candidate_chunk_limit, 20)
+        self.assertEqual(settings.ai_semantic_max_chunks_per_news, 2)
+        self.assertEqual(settings.ai_semantic_score_threshold, 0.45)
+        self.assertEqual(settings.ai_semantic_index_prefix, "idx:ai:news:chunk:v2")
+        self.assertEqual(settings.ai_qa_max_context_tokens, 2400)
+        self.assertEqual(settings.ai_semantic_index_alias, "idx:ai:news:chunk:active")
+        self.assertTrue(settings.embedding_tokenizer_path.endswith("tokenizer.json"))
+
+    def test_rejects_inconsistent_chunk_token_budgets(self):
+        """An overlap or chunk larger than its parent budget would reintroduce truncation."""
+        from app.core.config import Settings
+
+        invalid_settings = (
+            {
+                "ai_semantic_chunk_size_tokens": 320,
+                "ai_semantic_chunk_overlap_tokens": 320,
+            },
+            {
+                "ai_semantic_chunk_size_tokens": 481,
+                "ai_semantic_embedding_input_max_tokens": 480,
+            },
+            {
+                "ai_semantic_embedding_input_max_tokens": 513,
+            },
+            {
+                "ai_semantic_candidate_chunk_limit": 4,
+                "ai_qa_retrieval_limit": 5,
+            },
+        )
+        for values in invalid_settings:
+            with self.subTest(values=values), self.assertRaises(ValidationError):
+                Settings(**values)
+
+    def test_reads_v2_chunk_settings_from_environment(self):
+        os.environ.update({
+            "AI_QA_MAX_CONTEXT_TOKENS": "1800",
+            "EMBEDDING_TOKENIZER_PATH": "models/bge/tokenizer.json",
+            "AI_SEMANTIC_INDEX_ALIAS": "idx:test:active",
+            "AI_SEMANTIC_INDEX_PREFIX": "idx:test:v2",
+            "AI_SEMANTIC_CHUNK_KEY_PREFIX": "test:chunk:v2",
+            "AI_SEMANTIC_CANDIDATE_CHUNK_LIMIT": "12",
+            "AI_SEMANTIC_MAX_CHUNKS_PER_NEWS": "3",
+            "AI_SEMANTIC_CHUNK_SIZE_TOKENS": "256",
+            "AI_SEMANTIC_CHUNK_OVERLAP_TOKENS": "32",
+            "AI_SEMANTIC_EMBEDDING_INPUT_MAX_TOKENS": "448",
+        })
+
+        from app.core.config import Settings
+
+        settings = Settings(ai_qa_retrieval_limit=5)
+        self.assertEqual(settings.ai_qa_max_context_tokens, 1800)
+        self.assertEqual(settings.embedding_tokenizer_path, "models/bge/tokenizer.json")
+        self.assertEqual(settings.ai_semantic_index_alias, "idx:test:active")
+        self.assertEqual(settings.ai_semantic_index_prefix, "idx:test:v2")
+        self.assertEqual(settings.ai_semantic_chunk_key_prefix, "test:chunk:v2")
+        self.assertEqual(settings.ai_semantic_candidate_chunk_limit, 12)
+        self.assertEqual(settings.ai_semantic_max_chunks_per_news, 3)
+        self.assertEqual(settings.ai_semantic_chunk_size_tokens, 256)
+        self.assertEqual(settings.ai_semantic_chunk_overlap_tokens, 32)
+        self.assertEqual(settings.ai_semantic_embedding_input_max_tokens, 448)
+
     def test_rejects_summary_keep_window_that_is_not_smaller_than_trigger(self):
         from app.core.config import Settings
 
@@ -166,6 +236,12 @@ class SettingsTest(unittest.TestCase):
             "AI_SEMANTIC_INDEX_NAME", "AI_SEMANTIC_KEY_PREFIX",
             "AI_SEMANTIC_VECTOR_DIMENSIONS", "AI_SEMANTIC_BATCH_SIZE",
             "AI_SEMANTIC_RETRIEVAL_LIMIT", "AI_SEMANTIC_SCORE_THRESHOLD",
+            "AI_QA_MAX_CONTEXT_TOKENS", "EMBEDDING_TOKENIZER_PATH",
+            "AI_SEMANTIC_INDEX_ALIAS", "AI_SEMANTIC_INDEX_PREFIX",
+            "AI_SEMANTIC_CHUNK_KEY_PREFIX", "AI_SEMANTIC_CANDIDATE_CHUNK_LIMIT",
+            "AI_SEMANTIC_MAX_CHUNKS_PER_NEWS", "AI_SEMANTIC_CHUNK_SIZE_TOKENS",
+            "AI_SEMANTIC_CHUNK_OVERLAP_TOKENS",
+            "AI_SEMANTIC_EMBEDDING_INPUT_MAX_TOKENS",
         ):
             os.environ.pop(key, None)
 
